@@ -82,18 +82,28 @@ For in-depth architectural specifications and governance policies, refer to the 
 
 ```text
 .
-├── agent.py               # LangGraph StateGraph, nodes, and router functions
+├── agent.py               # LangGraph StateGraph, nodes, router functions, DI graph factory
 ├── app.py                 # Streamlit web application & live graph execution
 ├── db_handler.py          # SQLAlchemy 2.0 ORM models, migrations, & Excel exporter
+├── logging_config.py       # Centralized structured logging for CLI & server
 ├── main.py                # CLI runner and entrypoint for batch processing
 ├── models.py              # Pydantic v2 domain schemas and data normalization
-├── ocr_engine.py          # RapidOCR (ONNX) wrapper & PDF rasterizer
-├── pyproject.toml         # Dependencies and project metadata (uv-managed)
+├── ocr_engine.py           # RapidOCR (ONNX) wrapper & PDF rasterizer
+├── tareas.py               # Console entry points: uv run lint | test | dev
+├── pyproject.toml         # Dependencies, quality-gate config, uv scripts
 ├── .env.example           # Environment template (safe for VCS)
+├── data/                  # Input invoices (PDF/PNG) — demo files live here
 ├── scripts/
-│   └── crear_factura_demo.py # Synthetic sample invoice generator (PDF/PNG)
+│   └── crear_factura_demo.py  # Synthetic sample invoice generator (PDF/PNG)
 └── tests/
-    └── test_agent.py      # Unit tests for routers, validators, and heuristics
+    ├── test_e2e.py         # Full-graph integration test (mocked OCR + Gemini)
+    ├── test_agent.py       # Routers, validators, and quality heuristics
+    ├── test_agent_nodes.py # Node-level unit tests of the state machine
+    ├── test_modelos.py     # Pydantic schemas, parsers, normalization
+    ├── test_ocr_engine.py  # OCR wrapper & rasterizer
+    ├── test_db_handler.py  # Persistence + idempotent Excel export
+    ├── test_main.py        # CLI runner (env loading, arg resolution, exit codes)
+    └── test_logging_config.py
 ```
 
 ---
@@ -130,8 +140,9 @@ Edit `.env` and set your Google AI Studio API key:
 
 ```env
 GEMINI_API_KEY=your_google_ai_studio_api_key_here
-# Optional model override (defaults to gemini-1.5-flash):
-# GEMINI_MODEL=gemini-2.0-flash
+# gemini-1.5-flash was retired from ListModels; gemini-2.5-flash is the
+# model verified against this pipeline (structured output + multimodal vision):
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
 ---
@@ -143,8 +154,10 @@ GEMINI_API_KEY=your_google_ai_studio_api_key_here
 Launch the web interface to upload invoices, inspect live graph step execution, review structured tables, and download reports:
 
 ```bash
-uv run streamlit run app.py
+uv run dev
 ```
+
+Extra arguments are forwarded to Streamlit (e.g. `uv run dev -- --server.port 9000`).
 Open [http://localhost:8501](http://localhost:8501) in your browser.
 
 ### Option B: CLI Batch Processing
@@ -166,15 +179,36 @@ Generated outputs will be saved to `facturas.db` (SQLite) and `reporte_facturas.
 
 ---
 
-## Running Tests
+## Quality Gates & Automation
 
-Execute the comprehensive unit test suite (33 tests covering pure routers, heuristics, currency parsers, and schema validation):
+Every change is gated before it reaches `main`. Three console shortcuts are wired in `pyproject.toml`
+(`[project.scripts]` → `tareas.py`):
 
 ```bash
-uv run pytest
+uv run lint   # ruff check --fix + ruff format + mypy (strict)
+uv run test   # pytest with branch-coverage report
+uv run dev    # Streamlit server (args forwarded: uv run dev -- --server.port 9000)
 ```
 
-All unit tests run offline in milliseconds without making external API calls.
+| Gate | Tooling | Current status |
+|---|---|---|
+| Lint & format | `ruff` (pycodestyle, pyflakes, isort, pyupgrade, bugbear; line-length 110) | ✅ 0 issues |
+| Type checking | `mypy` in strict mode (`disallow_untyped_defs`, pydantic plugin) | ✅ 0 issues in 17 files |
+| Tests | `pytest` — 61 offline tests (unit, node-level, CLI, end-to-end) | ✅ all passing |
+| Coverage | `pytest-cov` with `branch = true` | ✅ 90.8 % overall (db_handler 100 %, agent 91 %) |
+
+**End-to-end without billing.** `tests/test_e2e.py` drives the *entire* `StateGraph`
+(ingesta → OCR → estructurar/persistir/exportar, including the vision-fallback detours) with
+`unittest.mock.patch` replacing RapidOCR and the Gemini parser, and isolated SQLite/Excel artifacts in
+`tmp_path`. The suite never consumes API quota and runs offline in ~2 s.
+
+**Structured logging.** All entry points share one configuration (`logging_config.py`); scattered
+`print()` calls were removed, and noisy third-party loggers are demoted:
+
+```text
+[2026-10-30 08:23:33] [INFO] [agent.py] - Nodo 'ocr': 30 línea(s), confianza media 0.98
+[2026-10-30 08:23:33] [INFO] [db_handler.py] - Insertada factura #1 (ACME, total=8059.21)
+```
 
 ---
 
