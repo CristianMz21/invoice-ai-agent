@@ -68,16 +68,16 @@ flowchart TD
         C1 --> D{Router: enrutar_post_ocr}
     end
 
-    subgraph Extraction["3. Structured Extraction Tier"]
+    subgraph Extraction["3. Structured Extraction & Tool Tier"]
         D -- "Pass Quality Gate (Conf >= 0.5 & Len >= 40)" --> E[Node: estructurar]
         D -- "Fail Gate" --> F[Node: vision_fallback]
         
-        E --> E1[Gemini 1.5/2.0 Flash]
-        E1 --> E2[with_structured_output: InvoiceModel]
+        E --> T{Router: enrutar_post_estructurar}
+        T -- "Has Tool Calls" --> T1[Node: tools / ToolNode]
+        T1 -->|Append Observation| E
         
-        E2 --> G{Router: enrutar_post_estructura}
-        G -- "Validation Success" --> H[Node: persistir]
-        G -- "Validation Failure" --> F
+        T -- "Valid InvoiceModel" --> H[Node: persistir]
+        T -- "Validation Failure" --> F
         
         F --> F1[Gemini Multimodal Vision API]
         F1 --> H
@@ -102,27 +102,36 @@ The core execution graph is defined as a LangGraph `CompiledStateGraph` passing 
 
 | Field | Type | Description |
 |---|---|---|
-| `ruta_archivo` | `str` | Absolute filesystem path of the source document |
-| `tipo_archivo` | `str` | Detected MIME type (`pdf`, `png`, `jpg`) |
-| `imagenes` | `list[Any]` | In-memory normalized PIL Images per page |
-| `texto_ocr` | `str \| None` | Raw concatenated text extracted by RapidOCR |
-| `confianza_ocr` | `float` | Weighted confidence score of OCR detection $[0.0, 1.0]$ |
-| `factura` | `InvoiceModel \| None` | Validated Pydantic domain model |
-| `error` | `str \| None` | Error trace captured during execution |
-| `usar_vision` | `bool` | Flag indicating if Vision Fallback was triggered |
-| `registro_id` | `int \| None` | Primary key assigned in SQLite database |
-| `ruta_excel` | `str \| None` | Absolute path of generated Excel report |
+| `archivo_entrada` | `str` | Original file path (PDF or image). |
+| `rutas_imagenes` | `list[Path]` | Normalized PNG page paths for processing. |
+| `imagen_fallback` | `str \| None` | Path to representative image for multimodal fallback. |
+| `texto_ocr` | `str` | Raw text transcribed across all pages. |
+| `confianza_ocr` | `float` | Weighted mean confidence score of OCR lines $[0.0, 1.0]$. |
+| `ocr_util` | `bool` | Heuristic evaluation flag indicating if text is usable. |
+| `factura` | `InvoiceModel \| None` | Pydantic v2 domain model adhering to financial rules. |
+| `metodo_extraccion` | `str` | Extraction method (`METODO_OCR_LLM` or `METODO_VISION_FALLBACK`). |
+| `registro_id` | `int` | Primary key assigned in SQLite database (`facturas.id`). |
+| `error` | `str \| None` | Explanatory message if graph aborted or failed. |
+| `messages` | `list[BaseMessage]` | Conversational history with `add_messages` reducer for MCP tool execution. |
+| `auditoria_erp` | `dict[str, Any] \| None` | Supplementary accounting verification data from tools. |
+| `herramientas_usadas` | `list[str]` | Audit list of tool names executed during extraction. |
 
 ### 3.2 Routing & Transition Matrix
 
 | Current State / Node | Decision Condition | Next Node | Rationality |
 |---|---|---|---|
+| `ingesta` | File normalized and rasterized | `ocr` | Document converted to standard image format. |
+| `ingesta` | Missing file or rasterization exception | `END` | Unrecoverable I/O error; state reports descriptive error. |
 | `ocr` | `len(texto) >= 40` AND `confianza >= 0.5` AND has digits | `estructurar` | Text quality is sufficient for token-efficient LLM prompt. |
-| `ocr` | `texto == null` OR `confianza < 0.5` OR text too short | `vision_fallback` | Local OCR failed to resolve structure; trigger multimodal vision. |
-| `estructurar` | `factura != null` AND `total != null` | `persistir` | Extraction conforms to Pydantic domain invariants. |
+| `ocr` | `texto == ""` OR `confianza < 0.5` OR text too short | `vision_fallback` | Local OCR failed to resolve structure; trigger multimodal vision. |
+| `estructurar` | Last message contains `tool_calls` | `tools` | LLM requires auxiliary accounting validation (ERP / FX). |
+| `tools` | Execution finished | `estructurar` | Observations appended to `messages`; LLM continues reasoning. |
+| `estructurar` | `factura != null` AND `factura_util(factura) == True` | `persistir` | Extraction conforms to Pydantic domain invariants. |
 | `estructurar` | Validation error OR missing mandatory fields | `vision_fallback` | Text transcription lacked semantic coherence for schema alignment. |
 | `vision_fallback` | `factura != null` | `persistir` | Multimodal model recovered document structure. |
+| `vision_fallback` | Extraction failed or unrecoverable error | `END` | Document cannot be transcribed; pipeline aborts with error. |
 | `persistir` | Insertion committed | `exportar` | Database state updated; regenerate reports. |
+| `exportar` | Report regenerated | `END` | Batch step complete. |
 
 ---
 

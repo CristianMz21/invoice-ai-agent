@@ -1,6 +1,6 @@
-"""Pruebas unitarias para el registro dinámico de herramientas (ToolRegistry)."""
-
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 from langchain_core.tools import BaseTool, tool
@@ -107,3 +107,27 @@ def test_discover_tools() -> None:
     assert any("mcp_dummy_tool" in mod for mod in discovered)
     assert reg.has_tool("consultar_erp")
     assert reg.has_tool("consultar_tipo_cambio")
+
+
+def test_register_mcp_tool_y_get_langchain_tools() -> None:
+    """Valida el registro de herramientas MCP y su exportación a BaseTool de LangChain."""
+    reg = ToolRegistry("mcp_test_reg")
+
+    def dummy_handler(x: int) -> int:
+        return x * 2
+
+    reg.register_mcp_tool("doble", "Calcula el doble", dummy_handler)
+    assert reg.has_tool("doble")
+    assert reg.execute_tool("doble", x=5) == 10
+
+    tools = reg.get_langchain_tools()
+    assert len(tools) == 1
+    assert tools[0].name == "doble"
+
+
+def test_discover_tools_ruta_inexistente(tmp_path: Path) -> None:
+    """Valida que discover_tools retorne lista vacía si la ruta no existe."""
+    reg = ToolRegistry("empty_reg")
+    res = reg.discover_tools(tmp_path / "carpeta_no_existente")
+    assert res == []
+

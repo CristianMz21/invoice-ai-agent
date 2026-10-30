@@ -135,3 +135,70 @@ def test_construir_grafo_compilacion() -> None:
     grafo = agent.construir_grafo(motor_ocr=mock_motor, llm=mock_llm)
     assert grafo is not None
     assert hasattr(grafo, "invoke")
+
+
+def test_nodo_estructurar_con_herramientas_tool_calls() -> None:
+    """Valida que si el LLM con herramientas emite tool_calls, se retornen en el estado."""
+    mock_llm = MagicMock()
+    mock_llm_herramientas = MagicMock()
+    respuesta_mock = MagicMock()
+    respuesta_mock.tool_calls = [{"name": "consultar_erp", "args": {"proveedor": "Acme"}}]
+    mock_llm_herramientas.invoke.return_value = respuesta_mock
+
+    res = agent._nodo_estructurar(
+        {"texto_ocr": "Factura Acme"},
+        llm=mock_llm,
+        llm_con_herramientas=mock_llm_herramientas,
+    )
+    assert "messages" in res
+    assert res["messages"] == [respuesta_mock]
+
+
+def test_nodo_estructurar_con_mensajes_previos() -> None:
+    """Valida que si ya existen mensajes previos, el parser incluya el contexto de herramientas."""
+    mock_llm = MagicMock()
+    mock_parser = MagicMock()
+    factura_esperada = InvoiceModel(proveedor="Acme Con Herramientas", total=100.0)
+    mock_parser.invoke.return_value = factura_esperada
+    mock_llm.with_structured_output.return_value = mock_parser
+
+    mock_msg = MagicMock()
+    mock_msg.tool_calls = []
+
+    res = agent._nodo_estructurar(
+        {"texto_ocr": "Factura Acme", "messages": [mock_msg]},
+        llm=mock_llm,
+        llm_con_herramientas=None,
+    )
+    assert res["error"] is None
+    assert res["factura"] == factura_esperada
+    assert res["metodo_extraccion"] == agent.METODO_OCR_LLM
+
+
+def test_nodo_estructurar_herramientas_excepcion_continua() -> None:
+    """Valida que si el LLM de herramientas falla, continúe a estructuración directa."""
+    mock_llm = MagicMock()
+    mock_parser = MagicMock()
+    factura_esperada = InvoiceModel(proveedor="Fallback Directo", total=50.0)
+    mock_parser.invoke.return_value = factura_esperada
+    mock_llm.with_structured_output.return_value = mock_parser
+
+    mock_llm_herramientas = MagicMock()
+    mock_llm_herramientas.invoke.side_effect = RuntimeError("Error en conexión MCP")
+
+    res = agent._nodo_estructurar(
+        {"texto_ocr": "Factura Directa"},
+        llm=mock_llm,
+        llm_con_herramientas=mock_llm_herramientas,
+    )
+    assert res["error"] is None
+    assert res["factura"] == factura_esperada
+
+
+def test_enrutar_post_estructurar_con_tool_calls() -> None:
+    """Valida que si el último mensaje tiene tool_calls, la ruta sea 'tools'."""
+    mock_msg = MagicMock()
+    mock_msg.tool_calls = [{"name": "validar"}]
+    estado: agent.EstadoAgente = {"messages": [mock_msg]}
+    assert agent.enrutar_post_estructurar(estado) == "tools"
+

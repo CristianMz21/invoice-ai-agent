@@ -225,6 +225,63 @@ def _nodo_ocr(estado: EstadoAgente, *, motor: MotorOCR) -> dict[str, Any]:
     return {"texto_ocr": texto, "ocr_util": util, "confianza_ocr": round(confianza, 4)}
 
 
+def _construir_mensajes_agente(texto: str, mensajes: list[BaseMessage]) -> list[BaseMessage]:
+    """Prepara la secuencia de mensajes iniciales o propaga el historial existente."""
+    if not mensajes:
+        return [
+            SystemMessage(
+                content=(
+                    "Eres un agente empresarial de procesamiento de facturas y conciliación fiscal.\n"
+                    "Dispones de herramientas dinámicas (ERP, divisas). Si detectas un proveedor, "
+                    "consulta las herramientas para validar estado contable u órdenes de compra."
+                )
+            ),
+            HumanMessage(content=_PROMPT_ESTRUCTURAR.format(texto_ocr=texto)),
+        ]
+    return mensajes
+
+
+def _evaluar_paso_herramientas(
+    texto: str,
+    mensajes: list[BaseMessage],
+    llm_con_herramientas: Any,
+) -> dict[str, Any] | None:
+    """Evalúa si el LLM solicita invocar herramientas dinámicas durante la estructuración."""
+    if llm_con_herramientas is None or not hasattr(llm_con_herramientas, "invoke"):
+        return None
+
+    entrada = _construir_mensajes_agente(texto, mensajes)
+    try:
+        respuesta = llm_con_herramientas.invoke(entrada)
+    except Exception as exc:
+        logger.warning("Fallo en invocación de herramientas (%s)", exc)
+        return None
+
+    if getattr(respuesta, "tool_calls", None):
+        return {"messages": [respuesta]}
+    return None
+
+
+def _invocar_parser_estructurado(
+    texto: str,
+    mensajes: list[BaseMessage],
+    llm: ChatGoogleGenerativeAI,
+) -> InvoiceModel | None:
+    """Invoca el parser tipado Pydantic con o sin el contexto previo de herramientas."""
+    parser = llm.with_structured_output(InvoiceModel)
+    if mensajes:
+        contexto: list[BaseMessage] = list(mensajes) + [
+            HumanMessage(
+                content=(
+                    "Tomando en cuenta los datos de las herramientas, genera el "
+                    "InvoiceModel estructurado final."
+                )
+            )
+        ]
+        return cast(InvoiceModel | None, parser.invoke(contexto))
+    return cast(InvoiceModel | None, parser.invoke(_PROMPT_ESTRUCTURAR.format(texto_ocr=texto)))
+
+
 def _nodo_estructurar(
     estado: EstadoAgente,
     *,
@@ -239,60 +296,20 @@ def _nodo_estructurar(
     texto = estado.get("texto_ocr", "")
     mensajes = estado.get("messages", [])
 
-    # Flujo agéntico con herramientas (si llm_con_herramientas está disponible)
-    if llm_con_herramientas is not None and hasattr(llm_con_herramientas, "invoke"):
-        if not mensajes:
-            mensajes_iniciales: list[BaseMessage] = [
-                SystemMessage(
-                    content=(
-                        "Eres un agente empresarial de procesamiento de facturas y conciliación fiscal.\n"
-                        "Dispones de herramientas dinámicas (ERP, divisas). Si detectas un proveedor, "
-                        "consulta las herramientas para validar estado contable u órdenes de compra."
-                    )
-                ),
-                HumanMessage(content=_PROMPT_ESTRUCTURAR.format(texto_ocr=texto)),
-            ]
-            logger.info("Nodo 'estructurar': evaluando contexto con herramientas dinámicas...")
-            try:
-                respuesta = llm_con_herramientas.invoke(mensajes_iniciales)
-            except Exception as exc:
-                logger.warning(
-                    "Fallo en LLM con herramientas (%s) -> continuando estructuración directa", exc
-                )
-                respuesta = None
-            if respuesta is not None and hasattr(respuesta, "tool_calls") and respuesta.tool_calls:
-                return {"messages": [respuesta]}
-        else:
-            # Viene de vuelta de la ejecución de una herramienta en el ToolNode
-            logger.info("Nodo 'estructurar': evaluando observaciones de herramientas...")
-            try:
-                respuesta = llm_con_herramientas.invoke(mensajes)
-            except Exception as exc:
-                logger.warning("Fallo en evaluación de herramientas (%s)", exc)
-                respuesta = None
-            if respuesta is not None and hasattr(respuesta, "tool_calls") and respuesta.tool_calls:
-                return {"messages": [respuesta]}
+    paso_herramientas = _evaluar_paso_herramientas(texto, mensajes, llm_con_herramientas)
+    if paso_herramientas is not None:
+        return paso_herramientas
 
     logger.info("Nodo 'estructurar': parseando el texto OCR con el LLM…")
-    parser = llm.with_structured_output(InvoiceModel)
     try:
-        if mensajes:
-            contexto = list(mensajes) + [
-                HumanMessage(
-                    content=(
-                        "Tomando en cuenta los datos de las herramientas, genera el "
-                        "InvoiceModel estructurado final."
-                    )
-                )
-            ]
-            factura = parser.invoke(contexto)
-        else:
-            factura = parser.invoke(_PROMPT_ESTRUCTURAR.format(texto_ocr=texto))
+        factura = _invocar_parser_estructurado(texto, mensajes, llm)
     except Exception as exc:  # cualquier fallo del LLM activa el fallback
         logger.warning("La estructuración por texto falló (%s) → fallback de visión", exc)
         return {"factura": None, "error": f"estructurar (texto): {exc}"}
-    if factura is None or not isinstance(factura, InvoiceModel):
+
+    if not isinstance(factura, InvoiceModel):
         return {"factura": None, "error": "estructurar (texto): respuesta vacía del LLM"}
+
     logger.info(
         "  Factura estructurada por texto: '%s' (total=%.2f)",
         factura.proveedor,

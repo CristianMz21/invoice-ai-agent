@@ -3,10 +3,12 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![LangGraph](https://img.shields.io/badge/orchestration-LangGraph-orange.svg)](https://github.com/langchain-ai/langgraph)
 [![Pydantic v2](https://img.shields.io/badge/validation-Pydantic%20v2-e92063.svg)](https://docs.pydantic.dev/)
+[![Quality Gate](https://img.shields.io/badge/SonarQube-Passed%20(A)-brightgreen.svg)](http://localhost:9000/dashboard?id=invoice-ai-agent)
+[![Coverage](https://img.shields.io/badge/coverage-89.6%25-brightgreen.svg)](http://localhost:9000/dashboard?id=invoice-ai-agent)
 [![Streamlit](https://img.shields.io/badge/ui-Streamlit-red.svg)](https://streamlit.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-An enterprise-grade **Proof of Concept (PoC)** demonstrating an autonomous document processing agent. The pipeline ingests unstructured and semi-structured invoices (PDF and images), applies a high-efficiency local OCR tier, structures the payload into strictly typed schemas using **Google Gemini**, implements automatic **Multimodal Vision Fallback**, and persists transactional records into SQLite and Excel.
+An enterprise-grade **Proof of Concept (PoC)** demonstrating an autonomous document processing agent. The pipeline ingests unstructured and semi-structured invoices (PDF and images), applies a high-efficiency local OCR tier, structures the payload into strictly typed schemas using **Google Gemini**, implements dynamic **Model Context Protocol (MCP)** tool calling for accounting reconciliation, provides automatic **Multimodal Vision Fallback**, and persists transactional records into SQLite and Excel.
 
 ---
 
@@ -23,7 +25,11 @@ flowchart TD
     D -- "Pass (Conf >= 0.5, Chars >= 40)" --> E[estructurar: Gemini Structured Output]
     D -- "Fail / Low Quality" --> F[vision_fallback: Gemini Multimodal Vision]
     
-    E --> G{Schema Validation}
+    E --> T{Tool Calls Requested?}
+    T -- "Yes (ERP/FX Reconciliation)" --> T1[tools: ToolNode Execution]
+    T1 --> E
+    T -- "No / Complete" --> G{Schema Validation}
+    
     G -- "Success" --> H[persistir: SQLite Transaction]
     G -- "Validation Error" --> F
     
@@ -41,9 +47,10 @@ flowchart TD
 - If the local OCR extraction fails the quality gate (e.g., scan noise, handwritten fields, text length < 40 chars, or average confidence < 0.5), or if structured JSON parsing fails, the agent autonomously routes the raw image to **Gemini Multimodal Vision**.
 - Guarantees high extraction recall without manual human intervention.
 
-### 3. StateGraph Orchestration (LangGraph)
+### 3. StateGraph Orchestration & Dynamic Tool Calling (LangGraph & MCP)
 - Built on LangGraph's compiled `StateGraph` with an explicit, strongly typed `EstadoAgente` schema.
-- Routing logic is decoupled into pure deterministic router functions (`enrutar_post_ocr`, `enrutar_post_estructura`), enabling 100% test coverage without network calls or LLM billing.
+- Integrated dynamic `ToolRegistry` and `ToolNode` enabling the LLM to autonomously invoke accounting validation tools (ERP vendor lookup, FX currency conversion) during structured extraction.
+- Routing logic is decoupled into pure deterministic router functions (`enrutar_post_ocr`, `enrutar_post_estructurar`), enabling 100% test coverage without network calls or LLM billing.
 
 ### 4. Resilient Structured Outputs with Pydantic v2
 - Utilizes `llm.with_structured_output(InvoiceModel)` to enforce schema adherence directly at the model engine level.
@@ -53,7 +60,7 @@ flowchart TD
   - Strict system prompt guardrails against hallucinations: missing values fall back to `null` rather than synthetic data.
 
 ### 5. Dependency Injection & Decoupling
-- Factory functions (`construir_grafo(motor_ocr, llm)`) accept dependencies at build time.
+- Factory functions (`construir_grafo(motor_ocr, llm, registry)`) accept dependencies at build time.
 - Decouples core graph logic from concrete SDK clients, making components effortlessly swappable, extensible, and mockable.
 
 ### 6. Relational Persistence & Idempotent Reporting
@@ -69,6 +76,7 @@ For in-depth architectural specifications and governance policies, refer to the 
 | Document | Scope |
 |---|---|
 | [**Architecture Specification**](docs/ARCHITECTURE.md) | Full C4 models, typed state machine semantics, threat analysis, and scaling roadmap. |
+| [**Architecture Proposal (Hexagonal & MCP)**](docs/ARCHITECTURE_PROPOSAL.md) | Enterprise Hexagonal Ports & Adapters refactoring plan and dynamic Model Context Protocol integration. |
 | [**ADR 0001: Hybrid OCR Strategy**](docs/adr/0001-hybrid-two-tier-ocr-strategy.md) | Rationale for combining local RapidOCR (ONNX) with automated Multimodal Vision fallback. |
 | [**ADR 0002: LangGraph State Machine**](docs/adr/0002-langgraph-state-machine-orchestration.md) | Evaluation of deterministic graph-based state transitions vs autonomous agent loops. |
 | [**ADR 0003: Pydantic v2 Structured Outputs**](docs/adr/0003-pydantic-v2-strict-structured-outputs.md) | Schema enforcement, currency/date normalization, and anti-hallucination guardrails. |
@@ -82,8 +90,8 @@ For in-depth architectural specifications and governance policies, refer to the 
 
 ```text
 .
-├── agent.py               # LangGraph StateGraph, nodes, router functions, DI graph factory
-├── app.py                 # Streamlit web application & live graph execution
+├── agent.py               # LangGraph StateGraph, nodes, dynamic ToolNode router, DI factory
+├── app.py                 # Streamlit web application & live graph execution telemetry
 ├── db_handler.py          # SQLAlchemy 2.0 ORM models, migrations, & Excel exporter
 ├── logging_config.py       # Centralized structured logging for CLI & server
 ├── main.py                # CLI runner and entrypoint for batch processing
@@ -95,10 +103,15 @@ For in-depth architectural specifications and governance policies, refer to the 
 ├── data/                  # Input invoices (PDF/PNG) — demo files live here
 ├── scripts/
 │   └── crear_factura_demo.py  # Synthetic sample invoice generator (PDF/PNG)
+├── tools/
+│   ├── __init__.py        # Tool package initialization
+│   ├── registry.py        # Dynamic ToolRegistry & plugin discovery system
+│   └── mcp_dummy_tool.py  # Mock Model Context Protocol (ERP vendor & FX) tools
 └── tests/
     ├── test_e2e.py         # Full-graph integration test (mocked OCR + Gemini)
-    ├── test_agent.py       # Routers, validators, and quality heuristics
-    ├── test_agent_nodes.py # Node-level unit tests of the state machine
+    ├── test_agente.py      # Routers, validators, and quality heuristics
+    ├── test_agent_nodes.py # Node-level unit tests (OCR, tools, fallback, routing)
+    ├── test_tools.py       # ToolRegistry, MCP registration, and dynamic dispatch tests
     ├── test_modelos.py     # Pydantic schemas, parsers, normalization
     ├── test_ocr_engine.py  # OCR wrapper & rasterizer
     ├── test_db_handler.py  # Persistence + idempotent Excel export
@@ -123,7 +136,7 @@ For in-depth architectural specifications and governance policies, refer to the 
 Clone the repository and install all dependencies in a virtual environment:
 
 ```bash
-git clone https://github.com/<your-username>/invoice-ai-agent.git
+git clone https://github.com/CristianMz21/invoice-ai-agent.git
 cd invoice-ai-agent
 uv sync
 ```
@@ -193,9 +206,10 @@ uv run dev    # Streamlit server (args forwarded: uv run dev -- --server.port 90
 | Gate | Tooling | Current status |
 |---|---|---|
 | Lint & format | `ruff` (pycodestyle, pyflakes, isort, pyupgrade, bugbear; line-length 110) | ✅ 0 issues |
-| Type checking | `mypy` in strict mode (`disallow_untyped_defs`, pydantic plugin) | ✅ 0 issues in 17 files |
-| Tests | `pytest` — 61 offline tests (unit, node-level, CLI, end-to-end) | ✅ all passing |
-| Coverage | `pytest-cov` with `branch = true` | ✅ 90.8 % overall (db_handler 100 %, agent 91 %) |
+| Type checking | `mypy` in strict mode (`disallow_untyped_defs`, pydantic plugin) | ✅ 0 issues in 21 source files |
+| Unit & Integration Tests | `pytest` — 74 offline tests (unit, node-level, tools, CLI, end-to-end) | ✅ 74 passing in ~1.9s |
+| Test Coverage | `pytest-cov` with branch coverage enabled | ✅ 89.6% line & branch coverage |
+| Static Code Analysis | `SonarQube` (Enterprise Python profile) | ✅ Quality Gate PASSED (`OK`), 0 smells, 0 bugs, 0 security hotspots |
 
 **End-to-end without billing.** `tests/test_e2e.py` drives the *entire* `StateGraph`
 (ingesta → OCR → estructurar/persistir/exportar, including the vision-fallback detours) with
