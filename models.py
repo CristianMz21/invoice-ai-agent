@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import date, datetime
+from enum import StrEnum
 from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -24,6 +25,30 @@ from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 logger = logging.getLogger(__name__)
+
+# ── Enums de Dominio y Negocio (Modelo Dual AP/AR y Multi-Tenancy) ───────────
+
+
+class TipoTercero(StrEnum):
+    """Clasificación del tercero contable en el modelo dual."""
+
+    CLIENTE = "CLIENTE"
+    PROVEEDOR = "PROVEEDOR"
+
+
+class TipoComprobante(StrEnum):
+    """Tipo de factura en cuentas por cobrar / pagar."""
+
+    EMITIDA = "EMITIDA"
+    RECIBIDA = "RECIBIDA"
+
+
+class EstadoFactura(StrEnum):
+    """Estado del ciclo de vida contable de la factura."""
+
+    PENDIENTE = "PENDIENTE"
+    PAGADA = "PAGADA"
+
 
 # ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -133,18 +158,33 @@ class InvoiceItem(BaseModel):
 
 
 class InvoiceModel(BaseModel):
-    """Factura estructurada.
+    """Factura estructurada con desglose de Tercero e importes (Pydantic V2).
 
-    Es el objeto al que el nodo de estructuración (flujo principal y fallback
-    de visión) está **obligado** mediante `with_structured_output(InvoiceModel)`.
+    Es el objeto canónico al que el LLM está obligado mediante
+    `with_structured_output(InvoiceModel)`.
     """
 
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
-    proveedor: str = Field(description="Razón social del emisor de la factura")
-    fecha: str | None = Field(default=None, description="Fecha de emisión en formato ISO-8601 (YYYY-MM-DD)")
+    proveedor: str = Field(description="Razón social o nombre del tercero emisor de la factura")
+    identificacion_fiscal: str | None = Field(
+        default=None,
+        description="NIT, CIF, RFC, NIF o identificación tributaria del tercero emisor",
+    )
+    fecha: str | None = Field(
+        default=None,
+        description="Fecha de emisión en formato ISO-8601 (YYYY-MM-DD)",
+    )
     numero_factura: str | None = Field(default=None, description="Número o código de la factura")
-    moneda: str | None = Field(default=None, description="Código de moneda, p. ej. EUR, USD, ARS")
+    moneda: str | None = Field(default=None, description="Código de moneda, p. ej. EUR, USD, COP, ARS")
+    subtotal: float | None = Field(
+        default=None,
+        description="Base imponible o subtotal antes de impuestos",
+    )
+    impuestos: float | None = Field(
+        default=None,
+        description="Importe total de impuestos o IVA desglosados",
+    )
     total: float | None = Field(default=None, description="Importe total de la factura")
     items: list[InvoiceItem] = Field(default_factory=list, description="Líneas de detalle")
 
@@ -159,7 +199,7 @@ class InvoiceModel(BaseModel):
     def _coaccionar_fecha(cls, valor: Any) -> Any:
         return fecha_a_iso(valor)
 
-    @field_validator("numero_factura", "moneda", mode="before")
+    @field_validator("identificacion_fiscal", "numero_factura", "moneda", mode="before")
     @classmethod
     def _coaccionar_texto_opcional(cls, valor: Any) -> str | None:
         if valor is None:
@@ -167,9 +207,9 @@ class InvoiceModel(BaseModel):
         texto = str(valor).strip()
         return texto or None
 
-    @field_validator("total", mode="before")
+    @field_validator("subtotal", "impuestos", "total", mode="before")
     @classmethod
-    def _coaccionar_total(cls, valor: Any) -> Any:
+    def _coaccionar_montos(cls, valor: Any) -> Any:
         return a_flotante(valor)
 
     @field_validator("items", mode="before")
@@ -179,50 +219,116 @@ class InvoiceModel(BaseModel):
 
     @property
     def es_util(self) -> bool:
-        """Umbral de calidad para persistir: sin importe total no vale el registro."""
+        """Umbral de calidad para persistir: requiere importe total registrado."""
         return self.total is not None
 
 
-# ── Persistencia SQLite (SQLAlchemy 2.0 declarativo) ─────────────────────────
+# ── Persistencia SQLite Normalizada en 3NF (SQLAlchemy 2.0 Declarativo) ──────
 
 
 class Base(DeclarativeBase):
     """Base declarativa común para todos los modelos ORM."""
 
 
-class FacturaRecord(Base):
-    """Fila de la tabla `facturas`: cabecera de la factura procesada."""
+class Empresa(Base):
+    """Tenant empresarial en arquitectura Multi-Tenancy."""
 
-    __tablename__ = "facturas"
+    __tablename__ = "empresas"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    archivo_origen: Mapped[str] = mapped_column(String(512), nullable=False)
-    proveedor: Mapped[str] = mapped_column(String(256), nullable=False)
-    fecha_emision: Mapped[str | None] = mapped_column(String(32))
-    numero_factura: Mapped[str | None] = mapped_column(String(64))
-    moneda: Mapped[str | None] = mapped_column(String(8))
-    total: Mapped[float | None] = mapped_column(Float)
-    metodo_extraccion: Mapped[str] = mapped_column(String(32), nullable=False)
-    creado_en: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    razon_social: Mapped[str] = mapped_column(String(256), nullable=False)
+    nit: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
 
-    items: Mapped[list[ItemFacturaRecord]] = relationship(
-        back_populates="factura",
+    terceros: Mapped[list[Tercero]] = relationship(
+        back_populates="empresa",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    facturas: Mapped[list[Factura]] = relationship(
+        back_populates="empresa",
         cascade="all, delete-orphan",
         lazy="selectin",
     )
 
 
-class ItemFacturaRecord(Base):
-    """Fila de la tabla `items_factura`: una línea de detalle."""
+class Tercero(Base):
+    """Tercero contable (Cliente o Proveedor) asociado a un Tenant específico."""
+
+    __tablename__ = "terceros"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    empresa_id: Mapped[int] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    tipo: Mapped[str] = mapped_column(String(32), default=TipoTercero.PROVEEDOR.value, nullable=False)
+    nombre: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    identificacion_fiscal: Mapped[str | None] = mapped_column(String(64), index=True)
+
+    empresa: Mapped[Empresa] = relationship(back_populates="terceros")
+    facturas: Mapped[list[Factura]] = relationship(
+        back_populates="tercero",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+
+class Factura(Base):
+    """Cabecera de Factura en 3NF con soporte Multi-Tenancy y modelo dual AP/AR."""
+
+    __tablename__ = "facturas"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    empresa_id: Mapped[int] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    tercero_id: Mapped[int] = mapped_column(ForeignKey("terceros.id"), nullable=False, index=True)
+    tipo_comprobante: Mapped[str] = mapped_column(
+        String(32), default=TipoComprobante.RECIBIDA.value, nullable=False
+    )
+    fecha: Mapped[str | None] = mapped_column(String(32))
+    numero_factura: Mapped[str | None] = mapped_column(String(64))
+    moneda: Mapped[str | None] = mapped_column(String(8))
+    subtotal: Mapped[float | None] = mapped_column(Float)
+    impuestos: Mapped[float | None] = mapped_column(Float)
+    total: Mapped[float | None] = mapped_column(Float)
+    estado: Mapped[str] = mapped_column(String(32), default=EstadoFactura.PENDIENTE.value, nullable=False)
+
+    # Metadatos del pipeline de procesamiento
+    archivo_origen: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    metodo_extraccion: Mapped[str] = mapped_column(String(32), default=METODO_OCR_LLM, nullable=False)
+    creado_en: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+    empresa: Mapped[Empresa] = relationship(back_populates="facturas", lazy="selectin")
+    tercero: Mapped[Tercero] = relationship(back_populates="facturas", lazy="selectin")
+    items: Mapped[list[ItemFactura]] = relationship(
+        back_populates="factura",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+    @property
+    def proveedor(self) -> str:
+        """Propiedad retrocompatible para compatibilidad con código existente."""
+        return self.tercero.nombre if self.tercero else ""
+
+    @property
+    def fecha_emision(self) -> str | None:
+        """Propiedad retrocompatible con el campo original fecha_emision."""
+        return self.fecha
+
+
+class ItemFactura(Base):
+    """Detalle de factura (línea de concepto o artículo)."""
 
     __tablename__ = "items_factura"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    factura_id: Mapped[int] = mapped_column(ForeignKey("facturas.id"), nullable=False)
+    factura_id: Mapped[int] = mapped_column(ForeignKey("facturas.id"), nullable=False, index=True)
 
     descripcion: Mapped[str] = mapped_column(String(512), default="")
     cantidad: Mapped[float | None] = mapped_column(Float)
     precio_unitario: Mapped[float | None] = mapped_column(Float)
     subtotal: Mapped[float | None] = mapped_column(Float)
 
-    factura: Mapped[FacturaRecord] = relationship(back_populates="items")
+    factura: Mapped[Factura] = relationship(back_populates="items")
+
+
+# Aliases para retrocompatibilidad
+FacturaRecord = Factura
+ItemFacturaRecord = ItemFactura

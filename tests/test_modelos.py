@@ -94,3 +94,22 @@ def test_modelo_campo_extra_ignorado() -> None:
     """El LLM a veces regala claves de más; deben ignorarse, no romper."""
     factura = InvoiceModel.model_validate({"proveedor": "X", "campo_imaginario": "y"})
     assert factura.proveedor == "X"
+
+
+def test_modelo_desglose_fiscal_3nf() -> None:
+    """Valida la extracción de identificación fiscal, subtotal e impuestos desglosados."""
+    factura = InvoiceModel.model_validate(
+        {
+            "proveedor": "Cloud Services Corp",
+            "identificacion_fiscal": "  NIT 901.888.777-1 ",
+            "subtotal": "$ 1.000,00",
+            "impuestos": "190,00",
+            "total": "$ 1.190,00",
+        }
+    )
+    assert factura.proveedor == "Cloud Services Corp"
+    assert factura.identificacion_fiscal == "NIT 901.888.777-1"
+    assert factura.subtotal == 1000.0
+    assert factura.impuestos == 190.0
+    assert factura.total == 1190.0
+    assert factura.es_util

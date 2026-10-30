@@ -185,10 +185,20 @@ def _generar_csv_facturas() -> bytes:
             [
                 {
                     "id": r.id,
+                    "tenant": r.empresa.razon_social if r.empresa else "",
                     "proveedor": r.proveedor,
-                    "fecha_emision": r.fecha_emision,
-                    "numero_factura": r.numero_factura,
-                    "moneda": r.moneda,
+                    "identificacion_fiscal": (
+                        r.tercero.identificacion_fiscal
+                        if r.tercero and r.tercero.identificacion_fiscal
+                        else ""
+                    ),
+                    "tipo_comprobante": r.tipo_comprobante,
+                    "estado": r.estado,
+                    "fecha": r.fecha or "",
+                    "numero_factura": r.numero_factura or "",
+                    "moneda": r.moneda or "",
+                    "subtotal": r.subtotal,
+                    "impuestos": r.impuestos,
                     "total": r.total,
                     "metodo_extraccion": r.metodo_extraccion,
                     "archivo_origen": r.archivo_origen,
@@ -445,10 +455,19 @@ def _render_db_history_tab() -> None:
             datos = [
                 {
                     "ID": r.id,
+                    "Tenant": r.empresa.razon_social if r.empresa else "Demo",
                     "Proveedor": r.proveedor,
-                    "Fecha": r.fecha_emision or "—",
+                    "NIT/Identificación": (
+                        r.tercero.identificacion_fiscal
+                        if r.tercero and r.tercero.identificacion_fiscal
+                        else "—"
+                    ),
+                    "Tipo": r.tipo_comprobante,
+                    "Fecha": r.fecha or "—",
+                    "Subtotal": f"${r.subtotal:,.2f}" if r.subtotal is not None else "—",
+                    "Impuestos": f"${r.impuestos:,.2f}" if r.impuestos is not None else "—",
                     "Total": f"${r.total:,.2f}" if r.total is not None else "—",
-                    "Moneda": r.moneda or "—",
+                    "Estado": r.estado,
                     "Método": r.metodo_extraccion,
                     "Archivo": Path(r.archivo_origen).name,
                 }

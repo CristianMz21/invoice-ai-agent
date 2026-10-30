@@ -42,6 +42,7 @@ _FUENTES_IMPRENTA: Final[tuple[str, ...]] = (
 _FUENTE_MANUSCRITA: Final[str] = "/usr/share/fonts/urw-base35/Z003-MediumItalic.otf"
 
 _COL_ITEM, _COL_CANT, _COL_UNIT, _COL_SUBTOTAL = 60, 470, 630, 800
+_COL_DER: Final[int] = 940  # columna derecha de los totales (valores alineados aquí)
 
 
 def _fuente(tamano: int, candidatos: tuple[str, ...] = _FUENTES_IMPRENTA) -> ImageFont.FreeTypeFont:
@@ -105,21 +106,30 @@ def _totales(
     lapiz: ImageDraw.ImageDraw,
     y0: int,
     pares: tuple[tuple[str, str], ...],
-    tamano_total: int = 34,
+    total_tamano: int = 30,
     margen: int = 630,
 ) -> int:
-    """Bloque de totales con recuadro final; devuelve la `y` siguiente."""
+    """Bloque de totales con valores alineados a la derecha; devuelve la `y` siguiente.
+
+    Cada valor se mide con `textlength` y se ancla a `_COL_DER`: los importes
+    largos ya no desbordan el recuadro ni el borde del lienzo, y la etiqueta
+    (y el recuadro) se corren a la izquierda si hiciera falta espacio.
+    """
     fuente_normal = _fuente(24)
-    fuente_total = _fuente(tamano_total)
+    fuente_total = _fuente(total_tamano)
     y = y0
     for etiqueta, valor in pares[:-1]:
         lapiz.text((margen, y), etiqueta, fill="black", font=fuente_normal)
-        lapiz.text((800, y), valor, fill="black", font=fuente_normal)
+        valor_x = _COL_DER - lapiz.textlength(valor, font=fuente_normal)
+        lapiz.text((valor_x, y), valor, fill="black", font=fuente_normal)
         y += 40
+
     etiqueta_total, valor_total = pares[-1]
-    lapiz.rectangle((margen - 10, y - 10, 950, y + 44), outline="black", width=3)
-    lapiz.text((margen, y), etiqueta_total, fill="black", font=fuente_total)
-    lapiz.text((800, y), valor_total, fill="black", font=fuente_total)
+    valor_x = _COL_DER - lapiz.textlength(valor_total, font=fuente_total)
+    etiqueta_x = min(margen, int(valor_x - lapiz.textlength(etiqueta_total, font=fuente_total) - 12))
+    lapiz.rectangle((etiqueta_x - 10, y - 8, 950, y + 46), outline="black", width=3)
+    lapiz.text((etiqueta_x, y + 2), etiqueta_total, fill="black", font=fuente_total)
+    lapiz.text((valor_x, y + 2), valor_total, fill="black", font=fuente_total)
     return y + 110
 
 
@@ -132,6 +142,20 @@ def _pie(lapiz: ImageDraw.ImageDraw, y0: int, lineas: tuple[str, ...]) -> None:
 
 
 # ── Facturas automáticas (impresas) ──────────────────────────────────────────
+
+
+def _recorte_inferior(imagen: Image.Image, margen: int = 70) -> Image.Image:
+    """Ajusta el alto hasta el último contenido + `margen` px (ancho intacto).
+
+    Elimina el blanco sobrante del lienzo fijo (1200+px) para que el papel
+    termine poco después del pie, como un documento real.
+    """
+    oscura = imagen.convert("L").point(lambda pixel: 255 if pixel < 240 else 0)
+    caja = oscura.getbbox()
+    if caja is None:
+        return imagen
+    hasta = min(imagen.height, caja[3] + margen)
+    return imagen.crop((0, 0, imagen.width, hasta))
 
 
 def _factura_norte_arte() -> Image.Image:
@@ -158,7 +182,7 @@ def _factura_norte_arte() -> Image.Image:
     _pie(
         lapiz, y, ("Condicion de pago: 30 dias F.F. Sistema ARS", "Gracias por su compra - vendedor: piso 1")
     )
-    return imagen
+    return _recorte_inferior(imagen)
 
 
 def _factura_tecnoexpress(es_copia: bool) -> Image.Image:
@@ -186,7 +210,7 @@ def _factura_tecnoexpress(es_copia: bool) -> Image.Image:
         lapiz, y + 30, (("Base imponible:", "1.898,75"), ("IVA 21%:", "398,74"), ("TOTAL:", "EUR 2.297,49"))
     )
     _pie(lapiz, y, ("Forma de pago: domiciliacion bancaria SEPA 5 dias.", "Vencimiento: 01/06/2026"))
-    return imagen
+    return _recorte_inferior(imagen)
 
 
 def _factura_servicios_tec() -> Image.Image:
@@ -211,7 +235,7 @@ def _factura_servicios_tec() -> Image.Image:
         lapiz, y + 30, (("Subtotal:", "408.000,00"), ("IVA 21%:", "85.680,00"), ("TOTAL:", "$ 493.680,00"))
     )
     _pie(lapiz, y, ("Contacto soporte: soporte@techserv.example - serie BS", "Referencia PO: 2026-TEC-0877"))
-    return imagen
+    return _recorte_inferior(imagen)
 
 
 # ── Facturas manuales (manuscrita / escaneo dañado) ──────────────────────────

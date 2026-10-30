@@ -130,4 +130,3 @@ def test_discover_tools_ruta_inexistente(tmp_path: Path) -> None:
     reg = ToolRegistry("empty_reg")
     res = reg.discover_tools(tmp_path / "carpeta_no_existente")
     assert res == []
-

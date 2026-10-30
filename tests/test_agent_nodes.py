@@ -201,4 +201,3 @@ def test_enrutar_post_estructurar_con_tool_calls() -> None:
     mock_msg.tool_calls = [{"name": "validar"}]
     estado: agent.EstadoAgente = {"messages": [mock_msg]}
     assert agent.enrutar_post_estructurar(estado) == "tools"
-
