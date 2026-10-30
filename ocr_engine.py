@@ -31,7 +31,7 @@ IMAGENES_SOPORTADAS: Final[frozenset[str]] = frozenset(
 
 
 @dataclass(slots=True)
-class ResultadoOCR:
+class ResultadoOCR(object):
     """Salida procesada del OCR sobre una imagen."""
 
     texto: str
@@ -52,7 +52,7 @@ def es_imagen(ruta: Path) -> bool:
     return ruta.suffix.lower() in IMAGENES_SOPORTADAS
 
 
-class MotorOCR:
+class MotorOCR(object):
     """Wrapper perezoso (lazy) sobre RapidOCR.
 
     El motor (y sus modelos ONNX) se instancia la primera vez que se usa, así
