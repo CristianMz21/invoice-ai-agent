@@ -25,11 +25,12 @@ from uuid import uuid4
 
 import pandas as pd
 import streamlit as st
+from langgraph.graph.state import CompiledStateGraph
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 from agent import CONFIANZA_MINIMA, EstadoAgente, construir_grafo, construir_llm
 from db_handler import RUTA_EXCEL, inicializar_bd
-from langgraph.graph.state import CompiledStateGraph
+from logging_config import configurar_logging
 from main import _cargar_dotenv
 from models import InvoiceModel
 from ocr_engine import MotorOCR
@@ -42,6 +43,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+configurar_logging()  # logs del agente visibles en la consola del servidor
 
 DIRECTORIO_DATOS: Final[Path] = Path("data")
 RUTA_DEMO: Final[Path] = DIRECTORIO_DATOS / "factura_demo.png"
@@ -79,9 +82,7 @@ _TITULOS_NODOS: Final[dict[str, dict[str, str]]] = {
 # Causas de error documentadas por el grafo → mensajes accionables.
 _CAUSAS_FALLO: Final[dict[str, str]] = {
     "ingesta": "El archivo no existe o no es un PDF/imagen soportado.",
-    "estructurar": (
-        "El LLM no logró estructurar el texto OCR: posible documento vacío o ilegible."
-    ),
+    "estructurar": ("El LLM no logró estructurar el texto OCR: posible documento vacío o ilegible."),
     "vision_fallback": (
         "El fallback de visión tampoco pudo leer la factura: probablemente la imagen "
         "está borrosa, recortada o sin importes detectables."
@@ -244,9 +245,7 @@ def _mostrar_error(estados: EstadoAgente) -> None:
     """Presenta el error documentado por el grafo con una causa accionable."""
     error = estados.get("error") or "El agente terminó sin producir una factura."
     causa_key = error.split(":")[0].split()[0]
-    causa = _CAUSAS_FALLO.get(
-        causa_key, "El pipeline no pudo obtener datos suficientes de la factura."
-    )
+    causa = _CAUSAS_FALLO.get(causa_key, "El pipeline no pudo obtener datos suficientes de la factura.")
     st.error(
         f"**La factura no pudo procesarse.** {causa}\n\n"
         "Sugerencia: sube el documento con mejor resolución o usa un PDF "
@@ -268,8 +267,7 @@ def _acortar(texto: str, maximo: int) -> str:
 
 st.title("🧾 GTC Agent · Validador Autónomo de Facturas")
 st.caption(
-    "Agente LangGraph · OCR local (RapidOCR/ONNX) · estructuración con Gemini · "
-    "SQLite · reporte en Excel"
+    "Agente LangGraph · OCR local (RapidOCR/ONNX) · estructuración con Gemini · SQLite · reporte en Excel"
 )
 
 _cargar_dotenv()  # idempotente: no sobrescribe variables ya presentes en el entorno

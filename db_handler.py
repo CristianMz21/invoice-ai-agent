@@ -90,23 +90,30 @@ def insertar_factura(factura: InvoiceModel, archivo_origen: str, metodo: str) ->
         sesion.add(registro)
         sesion.flush()  # asigna el id en la transacción, aún sin confirmar
         identificador = int(registro.id)
-    logger.info("Insertada factura #%d (%s, total=%.2f)", identificador, registro.proveedor, registro.total or 0.0)
+    logger.info(
+        "Insertada factura #%d (%s, total=%.2f)", identificador, registro.proveedor, registro.total or 0.0
+    )
     return identificador
 
 
-def exportar_excel(ruta: Path = RUTA_EXCEL) -> Path:
-    """Regenera `reporte_facturas.xlsx` con dos hojas: `Facturas` e `Items`."""
+def exportar_excel(ruta: Path | None = None) -> Path:
+    """Regenera el Excel con dos hojas: `Facturas` e `Items`.
+
+    `ruta=None` resuelve `RUTA_EXCEL` en tiempo de llamada (facilita
+    aislamiento en tests mediante monkeypatch).
+    """
+    destino = ruta if ruta is not None else RUTA_EXCEL
     df_facturas, df_items = _dataframes_de_bd()
-    with pd.ExcelWriter(ruta, engine="openpyxl") as escritor:
+    with pd.ExcelWriter(destino, engine="openpyxl") as escritor:
         _escribir_hoja(escritor, HOJA_FACTURAS, df_facturas)
         _escribir_hoja(escritor, HOJA_ITEMS, df_items)
     logger.info(
         "Excel actualizado: %s (%d facturas, %d items)",
-        ruta,
+        destino,
         len(df_facturas),
         len(df_items),
     )
-    return ruta
+    return destino
 
 
 # ── Internos ──────────────────────────────────────────────────────────────────
@@ -115,9 +122,7 @@ def exportar_excel(ruta: Path = RUTA_EXCEL) -> Path:
 def _dataframes_de_bd() -> tuple[pd.DataFrame, pd.DataFrame]:
     """Carga todo el contenido de SQLite como dos DataFrames listos para Excel."""
     with Session(_motor) as sesion:
-        registros = (
-            sesion.execute(select(FacturaRecord).order_by(FacturaRecord.id)).scalars().all()
-        )
+        registros = sesion.execute(select(FacturaRecord).order_by(FacturaRecord.id)).scalars().all()
 
     filas_facturas: list[dict[str, Any]] = []
     filas_items: list[dict[str, Any]] = []

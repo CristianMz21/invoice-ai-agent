@@ -16,7 +16,7 @@ resolution-markers = [
 [[package]]
 name = "agente-facturas"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "langchain-google-genai" },
     { name = "langgraph" },
@@ -49,12 +49,12 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.14.2" },
     { name = "rapidocr-onnxruntime", specifier = ">=1.4.4" },
     { name = "sqlalchemy", specifier = ">=2.1.6" },
-    { name = "streamlit", specifier = ">=1.66.1" },
+    { name = "streamlit", specifier = ">=1.51.0" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "mypy", specifier = ">=2.4.1" },
+    { name = "mypy", specifier = ">=1.18.2" },
     { name = "pytest", specifier = ">=9.2.0" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
     { name = "ruff", specifier = ">=0.17.3" },

@@ -6,7 +6,6 @@ import pytest
 
 from models import InvoiceItem, InvoiceModel, a_flotante, fecha_a_iso
 
-
 # ── a_flotante ────────────────────────────────────────────────────────────────
 
 

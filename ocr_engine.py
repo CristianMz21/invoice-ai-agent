@@ -136,7 +136,5 @@ class MotorOCR:
             pagina.save(destino, format="PNG")
             rutas.append(destino)
 
-        logger.info(
-            "PDF '%s' → %d página(s) de imagen en %s", ruta_pdf.name, len(rutas), directorio_tmp
-        )
+        logger.info("PDF '%s' → %d página(s) de imagen en %s", ruta_pdf.name, len(rutas), directorio_tmp)
         return rutas

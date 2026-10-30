@@ -9,10 +9,13 @@ para probar además la conversión de PDF del nodo de ingesta):
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Final
 
 from PIL import Image, ImageDraw, ImageFont
+
+logger = logging.getLogger(__name__)
 
 _RAIZ: Final[Path] = Path(__file__).resolve().parent.parent
 _DIRECTORIO_DATOS: Final[Path] = _RAIZ / "data"
@@ -125,7 +128,7 @@ def crear_demo() -> Path:
     ruta_pdf = _DIRECTORIO_DATOS / "factura_demo.pdf"
     imagen.save(ruta_pdf, format="PDF", resolution=150)
 
-    print(f"Generadas: {ruta_png} y {ruta_pdf}")
+    logger.info("Generadas: %s y %s", ruta_png, ruta_pdf)
     return ruta_png
 
 

@@ -14,7 +14,9 @@ env/
 .mypy_cache/
 .ruff_cache/
 .coverage
+coverage.xml
 htmlcov/
+.scannerwork/
 uv.lock.bak
 
 # Environment variables & secrets (CRITICAL)

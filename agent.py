@@ -45,12 +45,11 @@ tests y experimentos (p. ej. cambiar de modelo sin tocar el resto).
 from __future__ import annotations
 
 import base64
-import functools
 import logging
 import mimetypes
 import os
 from pathlib import Path
-from typing import Any, Final, TypedDict
+from typing import Any, Final, TypedDict, cast
 
 from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -58,7 +57,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from db_handler import exportar_excel, insertar_factura
-from models import InvoiceModel, METODO_OCR_LLM, METODO_VISION_FALLBACK
+from models import METODO_OCR_LLM, METODO_VISION_FALLBACK, InvoiceModel
 from ocr_engine import MotorOCR
 
 logger = logging.getLogger(__name__)
@@ -286,7 +285,7 @@ def _nodo_persistir(estado: EstadoAgente) -> dict[str, Any]:
     return {"registro_id": registro_id}
 
 
-def _nodo_exportar(estado: EstadoAgente) -> dict[str, Any]:
+def _nodo_exportar(_estado: EstadoAgente) -> dict[str, Any]:
     """Nodo 5: refresca el reporte Excel con todo lo que hay en SQLite."""
     ruta = exportar_excel()
     logger.info("Nodo 'exportar': reporte actualizado → %s", ruta.name)
@@ -332,18 +331,40 @@ def construir_grafo(
     motor_ocr: MotorOCR | None = None,
     llm: ChatGoogleGenerativeAI | None = None,
 ) -> CompiledStateGraph:
-    """Compila el StateGraph inyectando las dependencias por cierre."""
+    """Compila el StateGraph inyectando las dependencias por cierre tipado."""
     motor = motor_ocr or MotorOCR()
     modelo = llm or construir_llm()
 
+    def nodo_ingesta(estado: EstadoAgente) -> dict[str, Any]:
+        return _nodo_ingesta(estado, motor=motor)
+
+    def nodo_ocr(estado: EstadoAgente) -> dict[str, Any]:
+        return _nodo_ocr(estado, motor=motor)
+
+    def nodo_estructurar(estado: EstadoAgente) -> dict[str, Any]:
+        return _nodo_estructurar(estado, llm=modelo)
+
+    def nodo_vision_fallback(estado: EstadoAgente) -> dict[str, Any]:
+        return _nodo_vision_fallback(estado, llm=modelo)
+
+    def nodo_persistir(estado: EstadoAgente) -> dict[str, Any]:
+        return _nodo_persistir(estado)
+
+    def nodo_exportar(estado: EstadoAgente) -> dict[str, Any]:
+        return _nodo_exportar(estado)
+
     grafo = StateGraph(EstadoAgente)
 
-    grafo.add_node("ingesta", functools.partial(_nodo_ingesta, motor=motor))
-    grafo.add_node("ocr", functools.partial(_nodo_ocr, motor=motor))
-    grafo.add_node("estructurar", functools.partial(_nodo_estructurar, llm=modelo))
-    grafo.add_node("vision_fallback", functools.partial(_nodo_vision_fallback, llm=modelo))
-    grafo.add_node("persistir", _nodo_persistir)
-    grafo.add_node("exportar", _nodo_exportar)
+    # Nota: los stubs de langgraph 1.2.x no tipan `add_node` para callables
+    # `Callable[[TypedDict], dict]` bajo mypy (falso positivo de la librería,
+    # reproducible también con un grafo mínimo). Se silencia de forma
+    # puntual aquí; el resto del proyecto pasa mypy estricto.
+    grafo.add_node("ingesta", nodo_ingesta)  # type: ignore[call-overload]
+    grafo.add_node("ocr", nodo_ocr)  # type: ignore[call-overload]
+    grafo.add_node("estructurar", nodo_estructurar)  # type: ignore[call-overload]
+    grafo.add_node("vision_fallback", nodo_vision_fallback)  # type: ignore[call-overload]
+    grafo.add_node("persistir", nodo_persistir)  # type: ignore[call-overload]
+    grafo.add_node("exportar", nodo_exportar)  # type: ignore[call-overload]
 
     grafo.add_edge(START, "ingesta")
     grafo.add_conditional_edges("ingesta", enrutar_ingesta, {"ocr": "ocr", END: END})
@@ -368,5 +389,6 @@ def construir_grafo(
 def ejecutar_archivo(grafo: CompiledStateGraph, ruta: Path) -> EstadoAgente:
     """Conveniencia: ejecuta el pipeline completo sobre un archivo."""
     logger.info("════ Iniciando pipeline para: %s ════", ruta)
-    estado_final = grafo.invoke({"archivo_entrada": str(ruta)})
-    return estado_final
+    # `CompiledStateGraph.invoke` es tipado como `Any`/dict genérico; el estado
+    # real es nuestro `EstadoAgente` (contrato de agentes.py).
+    return cast(EstadoAgente, grafo.invoke({"archivo_entrada": str(ruta)}))

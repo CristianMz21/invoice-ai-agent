@@ -6,7 +6,6 @@ Se testea la lógica de decisión del grafo SIN invocar el LLM ni el OCR
 
 from __future__ import annotations
 
-from models import InvoiceModel
 from agent import (
     enrutar_ingesta,
     enrutar_post_estructurar,
@@ -15,7 +14,7 @@ from agent import (
     factura_util,
     texto_util,
 )
-
+from models import InvoiceModel
 
 # ── Heurística de texto útil ─────────────────────────────────────────────────
 

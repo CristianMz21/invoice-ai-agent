@@ -26,8 +26,10 @@ from typing import Final
 
 from agent import EstadoAgente, construir_grafo, ejecutar_archivo
 from db_handler import inicializar_bd
-from ocr_engine import IMAGENES_SOPORTADAS, EXTENSION_PDF
+from logging_config import configurar_logging
+from ocr_engine import EXTENSION_PDF, IMAGENES_SOPORTADAS
 
+configurar_logging()
 logger = logging.getLogger("main")
 
 DIRECTORIO_DATOS_DEFAULT: Final[str] = "data"
@@ -88,33 +90,32 @@ def _resolver_entradas(args: argparse.Namespace) -> list[Path]:
     ]
 
 
-def _imprimir_resumen(estado: EstadoAgente) -> bool:
-    """Imprime el desenlace de un archivo; devuelve True si hubo éxito."""
+def _registrar_resumen(estado: EstadoAgente) -> bool:
+    """Registra en logs el desenlace de un archivo; True si hubo éxito."""
     factura = estado.get("factura")
     registro_id = estado.get("registro_id")
     nombre = Path(estado.get("archivo_entrada", "?")).name
 
     if factura is None or registro_id is None:
-        print(f"  [ERROR]   {nombre}: {estado.get('error') or 'sin resultado'}")
+        logger.error("%s: %s", nombre, estado.get("error") or "sin resultado")
         return False
 
     total = f"{factura.total:.2f}" if factura.total is not None else "s/dato"
-    print(
-        f"  [OK]      {nombre} → id={registro_id} | {factura.proveedor} | "
-        f"{factura.fecha or 'sin fecha'} | total={total} | "
-        f"{len(factura.items)} ítems | método={estado.get('metodo_extraccion')}"
+    logger.info(
+        "%s → id=%s | %s | %s | total=%s | %d ítems | método=%s",
+        nombre,
+        registro_id,
+        factura.proveedor,
+        factura.fecha or "sin fecha",
+        total,
+        len(factura.items),
+        estado.get("metodo_extraccion"),
     )
     return True
 
 
 def main() -> int:
     """Orquesta: configurar entorno → compilar grafo → procesar las entradas."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-        datefmt="%H:%M:%S",
-    )
-
     _cargar_dotenv()
     args = _interpretar_argumentos()
     if args.debug:
@@ -143,14 +144,15 @@ def main() -> int:
     fallos = 0
     for ruta in entradas:
         estado = ejecutar_archivo(grafo, ruta)
-        if _imprimir_resumen(estado):
+        if _registrar_resumen(estado):
             exitos += 1
         else:
             fallos += 1
 
-    print(
-        f"\nProceso completado: {exitos} OK / {fallos} con error → "
-        "facturas.db y reporte_facturas.xlsx actualizados."
+    logger.info(
+        "Proceso completado: %d OK / %d con error → facturas.db y reporte_facturas.xlsx actualizados.",
+        exitos,
+        fallos,
     )
     return 0 if fallos == 0 else 1
 

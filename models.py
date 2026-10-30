@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import date, datetime
-from typing import Any, Final, Optional
+from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
@@ -47,7 +47,22 @@ _FORMATOS_FECHA: Final[tuple[str, ...]] = (
 # ── Normalizadores (públicos para poder testearlos) ──────────────────────────
 
 
-def a_flotante(valor: Any) -> Optional[float]:
+def _normalizar_separadores_decimales(texto: str) -> str:
+    """Normaliza comas y puntos a representación decimal canónica ('1234.56')."""
+    if "," in texto and "." in texto:
+        if texto.rfind(",") > texto.rfind("."):
+            return texto.replace(".", "").replace(",", ".")
+        return texto.replace(",", "")
+    if "," in texto:
+        if re.fullmatch(r"-?\d{1,3}(,\d{3})+", texto):
+            return texto.replace(",", "")
+        return texto.replace(",", ".")
+    if "." in texto and re.fullmatch(r"-?\d{1,3}(\.\d{3})+", texto):
+        return texto.replace(".", "")
+    return texto
+
+
+def a_flotante(valor: Any) -> float | None:
     """Convierte los formatos numéricos frecuentes en OCR a `float`.
 
     Soporta: "1.234,56" (ES), "1,234.56" (US), "1.56", "1,56", "$ 1.234,56",
@@ -64,25 +79,10 @@ def a_flotante(valor: Any) -> Optional[float]:
         return None
     # Quita todo lo que no sea dígito, coma, punto o signo (moneda, letras…).
     texto = re.sub(r"[^\d,.\-]", "", texto)
-    if not texto or texto in {"-", ".-", ".-"}:
+    if not texto or texto in {"-", ".-"}:
         return None
 
-    if "," in texto and "." in texto:
-        if texto.rfind(",") > texto.rfind("."):  # formato ES: 1.234,56
-            texto = texto.replace(".", "").replace(",", ".")
-        else:  # formato US: 1,234.56
-            texto = texto.replace(",", "")
-    elif "," in texto:
-        # "1,234" → miles (US); "1,23" → decimal.
-        if re.fullmatch(r"-?\d{1,3}(,\d{3})+", texto):
-            texto = texto.replace(",", "")
-        else:
-            texto = texto.replace(",", ".")
-    elif "." in texto:
-        # "1.234" → miles (ES); "1.23" → decimal.
-        if re.fullmatch(r"-?\d{1,3}(\.\d{3})+", texto):
-            texto = texto.replace(".", "")
-
+    texto = _normalizar_separadores_decimales(texto)
     try:
         return float(texto)
     except ValueError:
@@ -90,7 +90,7 @@ def a_flotante(valor: Any) -> Optional[float]:
         return None
 
 
-def fecha_a_iso(valor: Any) -> Optional[str]:
+def fecha_a_iso(valor: Any) -> str | None:
     """Normaliza la fecha a ISO-8601 (YYYY-MM-DD) si reconoce el formato.
 
     Si no logra normalizarla, devuelve el texto tal cual (el dato no se pierde).
@@ -122,9 +122,9 @@ class InvoiceItem(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     descripcion: str = ""
-    cantidad: Optional[float] = None
-    precio_unitario: Optional[float] = None
-    subtotal: Optional[float] = None
+    cantidad: float | None = None
+    precio_unitario: float | None = None
+    subtotal: float | None = None
 
     @field_validator("cantidad", "precio_unitario", "subtotal", mode="before")
     @classmethod
@@ -142,12 +142,10 @@ class InvoiceModel(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     proveedor: str = Field(description="Razón social del emisor de la factura")
-    fecha: Optional[str] = Field(
-        default=None, description="Fecha de emisión en formato ISO-8601 (YYYY-MM-DD)"
-    )
-    numero_factura: Optional[str] = Field(default=None, description="Número o código de la factura")
-    moneda: Optional[str] = Field(default=None, description="Código de moneda, p. ej. EUR, USD, ARS")
-    total: Optional[float] = Field(default=None, description="Importe total de la factura")
+    fecha: str | None = Field(default=None, description="Fecha de emisión en formato ISO-8601 (YYYY-MM-DD)")
+    numero_factura: str | None = Field(default=None, description="Número o código de la factura")
+    moneda: str | None = Field(default=None, description="Código de moneda, p. ej. EUR, USD, ARS")
+    total: float | None = Field(default=None, description="Importe total de la factura")
     items: list[InvoiceItem] = Field(default_factory=list, description="Líneas de detalle")
 
     @field_validator("proveedor", mode="before")
@@ -163,7 +161,7 @@ class InvoiceModel(BaseModel):
 
     @field_validator("numero_factura", "moneda", mode="before")
     @classmethod
-    def _coaccionar_texto_opcional(cls, valor: Any) -> Optional[str]:
+    def _coaccionar_texto_opcional(cls, valor: Any) -> str | None:
         if valor is None:
             return None
         texto = str(valor).strip()
@@ -200,14 +198,14 @@ class FacturaRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     archivo_origen: Mapped[str] = mapped_column(String(512), nullable=False)
     proveedor: Mapped[str] = mapped_column(String(256), nullable=False)
-    fecha_emision: Mapped[Optional[str]] = mapped_column(String(32))
-    numero_factura: Mapped[Optional[str]] = mapped_column(String(64))
-    moneda: Mapped[Optional[str]] = mapped_column(String(8))
-    total: Mapped[Optional[float]] = mapped_column(Float)
+    fecha_emision: Mapped[str | None] = mapped_column(String(32))
+    numero_factura: Mapped[str | None] = mapped_column(String(64))
+    moneda: Mapped[str | None] = mapped_column(String(8))
+    total: Mapped[float | None] = mapped_column(Float)
     metodo_extraccion: Mapped[str] = mapped_column(String(32), nullable=False)
     creado_en: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
-    items: Mapped[list["ItemFacturaRecord"]] = relationship(
+    items: Mapped[list[ItemFacturaRecord]] = relationship(
         back_populates="factura",
         cascade="all, delete-orphan",
         lazy="selectin",
@@ -223,8 +221,8 @@ class ItemFacturaRecord(Base):
     factura_id: Mapped[int] = mapped_column(ForeignKey("facturas.id"), nullable=False)
 
     descripcion: Mapped[str] = mapped_column(String(512), default="")
-    cantidad: Mapped[Optional[float]] = mapped_column(Float)
-    precio_unitario: Mapped[Optional[float]] = mapped_column(Float)
-    subtotal: Mapped[Optional[float]] = mapped_column(Float)
+    cantidad: Mapped[float | None] = mapped_column(Float)
+    precio_unitario: Mapped[float | None] = mapped_column(Float)
+    subtotal: Mapped[float | None] = mapped_column(Float)
 
-    factura: Mapped["FacturaRecord"] = relationship(back_populates="items")
+    factura: Mapped[FacturaRecord] = relationship(back_populates="items")
