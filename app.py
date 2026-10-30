@@ -82,7 +82,7 @@ _CUSTOM_CSS: Final[str] = """
     .badge-blue { background-color: #1e3a8a; color: #93c5fd; border: 1px solid #3b82f6; }
     .badge-purple { background-color: #3b0764; color: #d8b4fe; border: 1px solid #a855f7; }
     .badge-emerald { background-color: #064e3b; color: #6ee7b7; border: 1px solid #10b981; }
-    
+
     .erp-card {
         padding: 1rem 1.2rem;
         border-radius: 10px;
@@ -185,11 +185,12 @@ def _ejecutar_con_status(grafo: CompiledStateGraph, ruta: Path) -> EstadoAgente:
                     if detalle:
                         st.markdown(f"&nbsp;&nbsp;↳ {detalle}")
             exito = estados.get("factura") is not None
-            status.update(
-                label="✅ Pipeline completado exitosamente" if exito else "❌ El pipeline no pudo completar la factura",
-                state="complete" if exito else "error",
-                expanded=False,
+            label_status = (
+                "✅ Pipeline completado exitosamente"
+                if exito
+                else "❌ El pipeline no pudo completar la factura"
             )
+            status.update(label=label_status, state="complete" if exito else "error", expanded=False)
         except Exception as exc:  # noqa: BLE001
             estados.setdefault("error", f"runtime: {exc}")
             status.update(label="Fallo durante la ejecución del grafo", state="error")
@@ -202,7 +203,8 @@ def _detalle_de_delta(nodo: str, delta: dict[str, Any]) -> str | None:
     """Interpreta los eventos de cada nodo para el feed de progreso."""
     if nodo == "ocr" and "confianza_ocr" in delta:
         confianza = float(delta["confianza_ocr"])
-        return f"OCR Local completado: Confianza media **{confianza:.1%}** ({'Texto legible' if delta.get('ocr_util') else 'Texto insuficiente'})."
+        calidad = "Texto legible" if delta.get("ocr_util") else "Texto insuficiente"
+        return f"OCR Local completado: Confianza media **{confianza:.1%}** ({calidad})."
     if nodo == "estructurar" and delta.get("factura") is not None:
         return f"Factura estructurada: **{delta['factura'].proveedor}**."
     if nodo == "tools":
@@ -240,7 +242,7 @@ def _mostrar_resultados(estados: EstadoAgente, ruta_archivo: Path | None) -> Non
         ])
 
         with tab_resumen:
-            _render_resumen_tab(factura, estados)
+            _render_resumen_tab(factura)
 
         with tab_mcp:
             _render_mcp_trace_tab(estados)
@@ -257,7 +259,8 @@ def _render_document_preview(ruta_archivo: Path | None, estados: EstadoAgente) -
         elif ruta_archivo.suffix.lower() == ".pdf":
             rutas_img = estados.get("rutas_imagenes", [])
             if rutas_img and rutas_img[0].exists():
-                st.image(str(rutas_img[0]), use_container_width=True, caption=f"PDF rasterizado: {ruta_archivo.name} (Pág. 1)")
+                caption_pdf = f"PDF rasterizado: {ruta_archivo.name} (Pág. 1)"
+                st.image(str(rutas_img[0]), use_container_width=True, caption=caption_pdf)
             else:
                 st.info(f"📄 Documento PDF: `{ruta_archivo.name}`")
     else:
@@ -266,18 +269,20 @@ def _render_document_preview(ruta_archivo: Path | None, estados: EstadoAgente) -
     # Tarjeta de salud de lectura
     confianza = estados.get("confianza_ocr", 0.0)
     metodo = estados.get("metodo_extraccion", "—")
-    st.markdown(
-        f"""
-        <div style="background-color: rgba(30, 41, 59, 0.3); padding: 0.8rem; border-radius: 8px; border: 1px solid #334155; margin-top: 0.8rem;">
-            <div style="font-size: 0.85rem; color: #94a3b8;">MÉTODO DE EXTRACCIÓN: <strong style="color: #38bdf8;">{metodo}</strong></div>
-            <div style="font-size: 0.85rem; color: #94a3b8;">CONFIANZA DEL OCR: <strong style="color: {'#4ade80' if confianza >= 0.8 else '#fbbf24'};">{confianza:.1%}</strong></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    color_confianza = "#4ade80" if confianza >= 0.8 else "#fbbf24"
+    card_html = (
+        '<div style="background-color: rgba(30, 41, 59, 0.3); padding: 0.8rem; '
+        'border-radius: 8px; border: 1px solid #334155; margin-top: 0.8rem;">\n'
+        f'    <div style="font-size: 0.85rem; color: #94a3b8;">'
+        f'MÉTODO: <strong style="color: #38bdf8;">{metodo}</strong></div>\n'
+        f'    <div style="font-size: 0.85rem; color: #94a3b8;">'
+        f'CONFIANZA OCR: <strong style="color: {color_confianza};">{confianza:.1%}</strong></div>\n'
+        '</div>'
     )
+    st.markdown(card_html, unsafe_allow_html=True)
 
 
-def _render_resumen_tab(factura: InvoiceModel, estados: EstadoAgente) -> None:
+def _render_resumen_tab(factura: InvoiceModel) -> None:
     """Renderiza KPIs, conciliación en ERP vía MCP y tabla de ítems."""
     # Fila de métricas estilizadas
     m1, m2, m3 = st.columns(3)
@@ -292,35 +297,35 @@ def _render_resumen_tab(factura: InvoiceModel, estados: EstadoAgente) -> None:
     erp_resultado = consultar_erp(proveedor=factura.proveedor, numero_factura=factura.numero_factura)
     if erp_resultado.get("encontrado"):
         erp_data = erp_resultado["datos_erp"]
-        st.markdown(
-            f"""
-            <div class="erp-card">
-                <div style="font-weight: 700; color: #10b981; font-size: 0.95rem;">
-                    🛡️ CONCILIADO CON ERP CORPORATIVO (SAP S/4HANA Master Record)
-                </div>
-                <div style="font-size: 0.85rem; color: #cbd5e1; margin-top: 0.3rem;">
-                    • <strong>Razón Social Fiscal:</strong> {erp_data['legal_name']}<br/>
-                    • <strong>NIF/CIF:</strong> {erp_data['tax_id']} &nbsp;|&nbsp; <strong>Estatus:</strong> <span style="color: #4ade80;">{erp_data['status']}</span><br/>
-                    • <strong>Términos de Pago:</strong> {erp_data['payment_terms']} &nbsp;|&nbsp; <strong>Órdenes de Compra Abiertas:</strong> {', '.join(erp_data['open_purchase_orders']) or 'Ninguna'}
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        pos = ", ".join(erp_data["open_purchase_orders"]) or "Ninguna"
+        erp_html = (
+            '<div class="erp-card">\n'
+            '    <div style="font-weight: 700; color: #10b981; font-size: 0.95rem;">\n'
+            '        🛡️ CONCILIADO CON ERP CORPORATIVO (SAP S/4HANA Master Record)\n'
+            '    </div>\n'
+            '    <div style="font-size: 0.85rem; color: #cbd5e1; margin-top: 0.3rem;">\n'
+            f'        • <strong>Razón Social:</strong> {erp_data["legal_name"]}<br/>\n'
+            f'        • <strong>NIF/CIF:</strong> {erp_data["tax_id"]} | '
+            f'<strong>Estatus:</strong> <span style="color: #4ade80;">{erp_data["status"]}</span><br/>\n'
+            f'        • <strong>Términos:</strong> {erp_data["payment_terms"]} | '
+            f'<strong>Órdenes Abiertas:</strong> {pos}\n'
+            '    </div>\n'
+            '</div>'
         )
+        st.markdown(erp_html, unsafe_allow_html=True)
     else:
-        st.markdown(
-            f"""
-            <div class="erp-card-warning">
-                <div style="font-weight: 700; color: #f59e0b; font-size: 0.95rem;">
-                    ⚠️ ATENCIÓN: PROVEEDOR NO REGISTRADO EN EL MAESTRO DE ERP
-                </div>
-                <div style="font-size: 0.85rem; color: #cbd5e1; margin-top: 0.3rem;">
-                    El proveedor '{factura.proveedor}' no figura en la base contable. Requiere validación manual del área de Compras.
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        warning_html = (
+            '<div class="erp-card-warning">\n'
+            '    <div style="font-weight: 700; color: #f59e0b; font-size: 0.95rem;">\n'
+            '        ⚠️ ATENCIÓN: PROVEEDOR NO REGISTRADO EN EL MAESTRO DE ERP\n'
+            '    </div>\n'
+            '    <div style="font-size: 0.85rem; color: #cbd5e1; margin-top: 0.3rem;">\n'
+            f'        El proveedor "{factura.proveedor}" no figura en el ERP. '
+            'Requiere validación de Compras.\n'
+            '    </div>\n'
+            '</div>'
         )
+        st.markdown(warning_html, unsafe_allow_html=True)
 
     # Tabla de items
     st.write("#### Desglose de Líneas de Ítems")
@@ -356,7 +361,8 @@ def _render_mcp_trace_tab(estados: EstadoAgente) -> None:
     """Muestra la trazabilidad interna del agente y el texto de OCR extraído."""
     st.markdown("##### 🧬 Grafo de Estados & Protocolo MCP")
     tools_disponibles = default_registry.list_tools()
-    st.caption(f"El agente LangGraph tiene acceso a **{len(tools_disponibles)} herramientas dinámicas** en su registro:")
+    total_tools = len(tools_disponibles)
+    st.caption(f"El agente LangGraph tiene acceso a **{total_tools} herramientas dinámicas**:")
     for t in tools_disponibles:
         st.markdown(f"- `[{t.source.upper()}]` **{t.name}**: {t.description}")
 
@@ -364,7 +370,9 @@ def _render_mcp_trace_tab(estados: EstadoAgente) -> None:
     texto_ocr = estados.get("texto_ocr", "")
     if texto_ocr.strip():
         st.markdown("##### 🔍 Texto Crudo Extraído (RapidOCR)")
-        st.caption(f"Total de caracteres: {len(texto_ocr)} | Confianza media: {estados.get('confianza_ocr', 0):.1%}")
+        st.caption(
+            f"Total de caracteres: {len(texto_ocr)} | Confianza media: {estados.get('confianza_ocr', 0):.1%}"
+        )
         st.text_area("OCR Text Stream", texto_ocr, height=220, disabled=True)
 
 
