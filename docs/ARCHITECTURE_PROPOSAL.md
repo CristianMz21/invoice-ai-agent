@@ -99,10 +99,11 @@ from typing import Protocol
 from pathlib import Path
 from models import InvoiceModel
 
+
 class ProcessInvoiceUseCasePort(Protocol):
     """Primary entry point for invoice processing."""
-    def execute(self, file_path: Path) -> InvoiceModel:
-        ...
+
+    def execute(self, file_path: Path) -> InvoiceModel: ...
 ```
 
 ### 3.2 Driven Ports (Outbound)
@@ -112,17 +113,17 @@ class ProcessInvoiceUseCasePort(Protocol):
 from typing import Protocol, NamedTuple
 from pathlib import Path
 
+
 class OcrResult(NamedTuple):
     text: str
     confidence: float
     detected_lines: int
     is_usable: bool
 
+
 class OcrEnginePort(Protocol):
-    def prepare_inputs(self, file_path: Path) -> list[Path]:
-        ...
-    def extract_text(self, image_path: Path) -> OcrResult:
-        ...
+    def prepare_inputs(self, file_path: Path) -> list[Path]: ...
+    def extract_text(self, image_path: Path) -> OcrResult: ...
 ```
 
 #### B. `LlmReasoningPort` (Supporting Dynamic Tools)
@@ -131,13 +132,11 @@ from typing import Protocol, Any, Sequence
 from langchain_core.tools import BaseTool
 from models import InvoiceModel
 
+
 class LlmReasoningPort(Protocol):
-    def bind_tools(self, tools: Sequence[BaseTool]) -> "LlmReasoningPort":
-        ...
-    def extract_structured(self, ocr_text: str) -> InvoiceModel:
-        ...
-    def reason_with_tools(self, messages: list[Any]) -> Any:
-        ...
+    def bind_tools(self, tools: Sequence[BaseTool]) -> "LlmReasoningPort": ...
+    def extract_structured(self, ocr_text: str) -> InvoiceModel: ...
+    def reason_with_tools(self, messages: list[Any]) -> Any: ...
 ```
 
 #### C. `InvoiceRepositoryPort`
@@ -145,11 +144,10 @@ class LlmReasoningPort(Protocol):
 from typing import Protocol
 from models import InvoiceModel
 
+
 class InvoiceRepositoryPort(Protocol):
-    def save(self, invoice: InvoiceModel, source_file: str, method: str) -> int:
-        ...
-    def get_by_id(self, invoice_id: int) -> InvoiceModel | None:
-        ...
+    def save(self, invoice: InvoiceModel, source_file: str, method: str) -> int: ...
+    def get_by_id(self, invoice_id: int) -> InvoiceModel | None: ...
 ```
 
 #### D. `McpToolProviderPort` (Dynamic Tool Discovery)
@@ -157,14 +155,13 @@ class InvoiceRepositoryPort(Protocol):
 from typing import Protocol, Any
 from langchain_core.tools import BaseTool
 
+
 class McpToolProviderPort(Protocol):
     """Adapter interface for Model Context Protocol client connections."""
-    async def connect(self, server_url_or_cmd: str) -> None:
-        ...
-    async def list_available_tools(self) -> list[BaseTool]:
-        ...
-    async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
-        ...
+
+    async def connect(self, server_url_or_cmd: str) -> None: ...
+    async def list_available_tools(self) -> list[BaseTool]: ...
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any: ...
 ```
 
 ---

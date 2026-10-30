@@ -206,8 +206,8 @@ uv run dev    # Streamlit server (args forwarded: uv run dev -- --server.port 90
 `print()` calls were removed, and noisy third-party loggers are demoted:
 
 ```text
-[2026-10-30 08:23:33] [INFO] [agent.py] - Nodo 'ocr': 30 línea(s), confianza media 0.98
-[2026-10-30 08:23:33] [INFO] [db_handler.py] - Insertada factura #1 (ACME, total=8059.21)
+[2026-10-30 08:23:33] [INFO] [agent.py] - Nodo 'ingesta': analizando data/factura_demo.png
+[2026-10-30 08:23:33] [INFO] [db_handler.py] - Insertada factura #1 (ACME S.A., total=8059.21)
 ```
 
 ---
