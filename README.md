@@ -62,6 +62,22 @@ flowchart TD
 
 ---
 
+## Enterprise Documentation & Governance
+
+For in-depth architectural specifications and governance policies, refer to the following documents:
+
+| Document | Scope |
+|---|---|
+| [**Architecture Specification**](docs/ARCHITECTURE.md) | Full C4 models, typed state machine semantics, threat analysis, and scaling roadmap. |
+| [**ADR 0001: Hybrid OCR Strategy**](docs/adr/0001-hybrid-two-tier-ocr-strategy.md) | Rationale for combining local RapidOCR (ONNX) with automated Multimodal Vision fallback. |
+| [**ADR 0002: LangGraph State Machine**](docs/adr/0002-langgraph-state-machine-orchestration.md) | Evaluation of deterministic graph-based state transitions vs autonomous agent loops. |
+| [**ADR 0003: Pydantic v2 Structured Outputs**](docs/adr/0003-pydantic-v2-strict-structured-outputs.md) | Schema enforcement, currency/date normalization, and anti-hallucination guardrails. |
+| [**Contributing Guide**](CONTRIBUTING.md) | Development standards, pure function testing protocols, and PR lifecycle. |
+| [**Security Policy**](SECURITY.md) | Data boundaries, responsible disclosure process, and secret handling. |
+
+
+---
+
 ## Project Structure
 
 ```text
