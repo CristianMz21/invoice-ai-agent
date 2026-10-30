@@ -4,7 +4,7 @@
 [![LangGraph](https://img.shields.io/badge/orchestration-LangGraph-orange.svg)](https://github.com/langchain-ai/langgraph)
 [![Pydantic v2](https://img.shields.io/badge/validation-Pydantic%20v2-e92063.svg)](https://docs.pydantic.dev/)
 [![Quality Gate](https://img.shields.io/badge/SonarQube-Passed%20(A)-brightgreen.svg)](http://localhost:9000/dashboard?id=invoice-ai-agent)
-[![Coverage](https://img.shields.io/badge/coverage-89.6%25-brightgreen.svg)](http://localhost:9000/dashboard?id=invoice-ai-agent)
+[![Coverage](https://img.shields.io/badge/coverage-90.4%25-brightgreen.svg)](http://localhost:9000/dashboard?id=invoice-ai-agent)
 [![Streamlit](https://img.shields.io/badge/ui-Streamlit-red.svg)](https://streamlit.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -63,9 +63,14 @@ flowchart TD
 - Factory functions (`construir_grafo(motor_ocr, llm, registry)`) accept dependencies at build time.
 - Decouples core graph logic from concrete SDK clients, making components effortlessly swappable, extensible, and mockable.
 
-### 6. Relational Persistence & Idempotent Reporting
-- Backed by **SQLAlchemy 2.0** models (`facturas` and `items_factura`) on SQLite.
-- Excel synchronization (`reporte_facturas.xlsx`) is fully idempotent: SQLite remains the single source of truth, and sheets (`Facturas`, `Items`) are regenerated atomically.
+### 6. Relational Persistence & 3NF Multi-Tenancy Architecture
+- Backed by **SQLAlchemy 2.0** declarative models normalized to Third Normal Form (3NF):
+  - `empresas`: Multi-tenant organization boundaries.
+  - `terceros`: Accounting counterparties (dual model: `PROVEEDOR` for AP, `CLIENTE` for AR).
+  - `facturas`: Invoices with lifecycle status (`PENDIENTE`, `PAGADA`, `ANULADA`) and metadata traceability.
+  - `items_factura`: Granular line-item breakdown with foreign key integrity and cascading deletions.
+- Automated schema migrations and tenant bootstrapping via `init_db.py`.
+- Consolidated multi-format egress: Idempotent Excel (`reporte_facturas.xlsx`), structured CSV, and raw JSON export.
 
 ---
 
@@ -93,16 +98,18 @@ For in-depth architectural specifications and governance policies, refer to the 
 ├── agent.py               # LangGraph StateGraph, nodes, dynamic ToolNode router, DI factory
 ├── app.py                 # Streamlit web application & live graph execution telemetry
 ├── db_handler.py          # SQLAlchemy 2.0 ORM models, migrations, & Excel exporter
+├── init_db.py             # 3NF relational migration & tenant bootstrap CLI script
 ├── logging_config.py       # Centralized structured logging for CLI & server
 ├── main.py                # CLI runner and entrypoint for batch processing
-├── models.py              # Pydantic v2 domain schemas and data normalization
+├── models.py              # Pydantic v2 domain schemas, 3NF ORM entities, and normalization
 ├── ocr_engine.py           # RapidOCR (ONNX) wrapper & PDF rasterizer
 ├── tareas.py               # Console entry points: uv run lint | test | dev
 ├── pyproject.toml         # Dependencies, quality-gate config, uv scripts
 ├── .env.example           # Environment template (safe for VCS)
 ├── data/                  # Input invoices (PDF/PNG) — demo files live here
 ├── scripts/
-│   └── crear_factura_demo.py  # Synthetic sample invoice generator (PDF/PNG)
+│   ├── crear_factura_demo.py     # Synthetic sample invoice generator (PDF/PNG)
+│   └── crear_facturas_variadas.py # Multi-format test suite generator (EUR/ARS, clean/noisy)
 ├── tools/
 │   ├── __init__.py        # Tool package initialization
 │   ├── registry.py        # Dynamic ToolRegistry & plugin discovery system
@@ -114,7 +121,7 @@ For in-depth architectural specifications and governance policies, refer to the 
     ├── test_tools.py       # ToolRegistry, MCP registration, and dynamic dispatch tests
     ├── test_modelos.py     # Pydantic schemas, parsers, normalization
     ├── test_ocr_engine.py  # OCR wrapper & rasterizer
-    ├── test_db_handler.py  # Persistence + idempotent Excel export
+    ├── test_db_handler.py  # 3NF persistence, migrations, & idempotent Excel export
     ├── test_main.py        # CLI runner (env loading, arg resolution, exit codes)
     └── test_logging_config.py
 ```
@@ -206,9 +213,9 @@ uv run dev    # Streamlit server (args forwarded: uv run dev -- --server.port 90
 | Gate | Tooling | Current status |
 |---|---|---|
 | Lint & format | `ruff` (pycodestyle, pyflakes, isort, pyupgrade, bugbear; line-length 110) | ✅ 0 issues |
-| Type checking | `mypy` in strict mode (`disallow_untyped_defs`, pydantic plugin) | ✅ 0 issues in 21 source files |
-| Unit & Integration Tests | `pytest` — 74 offline tests (unit, node-level, tools, CLI, end-to-end) | ✅ 74 passing in ~1.9s |
-| Test Coverage | `pytest-cov` with branch coverage enabled | ✅ 89.6% line & branch coverage |
+| Type checking | `mypy` in strict mode (`disallow_untyped_defs`, pydantic plugin) | ✅ 0 issues in 23 source files |
+| Unit & Integration Tests | `pytest` — 79 offline tests (unit, node-level, tools, CLI, migrations, e2e) | ✅ 79 passing in ~1.6s |
+| Test Coverage | `pytest-cov` with branch coverage enabled | ✅ 90.4% line & branch coverage |
 | Static Code Analysis | `SonarQube` (Enterprise Python profile) | ✅ Quality Gate PASSED (`OK`), 0 smells, 0 bugs, 0 security hotspots |
 
 **End-to-end without billing.** `tests/test_e2e.py` drives the *entire* `StateGraph`

@@ -226,6 +226,9 @@ class InvoiceModel(BaseModel):
 # ── Persistencia SQLite Normalizada en 3NF (SQLAlchemy 2.0 Declarativo) ──────
 
 
+_CASCADE_DELETE_ORPHAN: Final[str] = "all, delete-orphan"
+
+
 class Base(DeclarativeBase):
     """Base declarativa común para todos los modelos ORM."""
 
@@ -241,12 +244,12 @@ class Empresa(Base):
 
     terceros: Mapped[list[Tercero]] = relationship(
         back_populates="empresa",
-        cascade="all, delete-orphan",
+        cascade=_CASCADE_DELETE_ORPHAN,
         lazy="selectin",
     )
     facturas: Mapped[list[Factura]] = relationship(
         back_populates="empresa",
-        cascade="all, delete-orphan",
+        cascade=_CASCADE_DELETE_ORPHAN,
         lazy="selectin",
     )
 
@@ -265,7 +268,7 @@ class Tercero(Base):
     empresa: Mapped[Empresa] = relationship(back_populates="terceros")
     facturas: Mapped[list[Factura]] = relationship(
         back_populates="tercero",
-        cascade="all, delete-orphan",
+        cascade=_CASCADE_DELETE_ORPHAN,
         lazy="selectin",
     )
 
@@ -298,7 +301,7 @@ class Factura(Base):
     tercero: Mapped[Tercero] = relationship(back_populates="facturas", lazy="selectin")
     items: Mapped[list[ItemFactura]] = relationship(
         back_populates="factura",
-        cascade="all, delete-orphan",
+        cascade=_CASCADE_DELETE_ORPHAN,
         lazy="selectin",
     )
 

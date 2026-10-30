@@ -11,6 +11,7 @@ Diseño Enterprise Staff Engineer:
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Final
 from uuid import uuid4
@@ -46,6 +47,8 @@ DIRECTORIO_DATOS: Final[Path] = Path("data")
 RUTA_DEMO: Final[Path] = DIRECTORIO_DATOS / "factura_demo.png"
 EXTENSIONES_SUBIDA: Final[tuple[str, ...]] = ("pdf", "png", "jpg", "jpeg")
 MAX_TAMANO_MB: Final[int] = 25
+_NOMBRE_REPORTE_EXCEL: Final[str] = "reporte_facturas.xlsx"
+_MIME_EXCEL: Final[str] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 _CUSTOM_CSS: Final[str] = """
 <style>
@@ -405,8 +408,8 @@ def _render_resumen_tab(factura: InvoiceModel) -> None:
             st.download_button(
                 label="📊 Descargar Reporte Excel (.xlsx)",
                 data=excel_bytes,
-                file_name="reporte_facturas.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                file_name=_NOMBRE_REPORTE_EXCEL,
+                mime=_MIME_EXCEL,
                 type="primary",
                 use_container_width=True,
             )
@@ -440,6 +443,66 @@ def _render_mcp_trace_tab(estados: EstadoAgente) -> None:
         st.text_area("OCR Text Stream", texto_ocr, height=220, disabled=True)
 
 
+def _formatear_filas_historial(registros: Sequence[FacturaRecord]) -> list[dict[str, Any]]:
+    """Transforma los registros ORM en filas formateadas para la tabla de Streamlit."""
+    return [
+        {
+            "ID": r.id,
+            "Tenant": r.empresa.razon_social if r.empresa else "Demo",
+            "Proveedor": r.proveedor,
+            "NIT/Identificación": (
+                r.tercero.identificacion_fiscal
+                if r.tercero and r.tercero.identificacion_fiscal
+                else "—"
+            ),
+            "Tipo": r.tipo_comprobante,
+            "Fecha": r.fecha or "—",
+            "Subtotal": f"${r.subtotal:,.2f}" if r.subtotal is not None else "—",
+            "Impuestos": f"${r.impuestos:,.2f}" if r.impuestos is not None else "—",
+            "Total": f"${r.total:,.2f}" if r.total is not None else "—",
+            "Estado": r.estado,
+            "Método": r.metodo_extraccion,
+            "Archivo": Path(r.archivo_origen).name,
+        }
+        for r in registros
+    ]
+
+
+def _render_botones_descarga_historial() -> None:
+    """Renderiza los botones de descarga de Excel, CSV y base de datos SQLite."""
+    st.write("###### Descargas Disponibles")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        excel_bytes = _obtener_excel_bytes()
+        if excel_bytes:
+            st.download_button(
+                label="📊 Descargar Excel",
+                data=excel_bytes,
+                file_name=_NOMBRE_REPORTE_EXCEL,
+                mime=_MIME_EXCEL,
+                use_container_width=True,
+            )
+    with c2:
+        csv_bytes = _generar_csv_facturas()
+        if csv_bytes:
+            st.download_button(
+                label="📄 Descargar CSV",
+                data=csv_bytes,
+                file_name="facturas_consolidadas.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+    with c3:
+        if RUTA_BD.exists():
+            st.download_button(
+                label="💾 Descargar BD SQLite",
+                data=RUTA_BD.read_bytes(),
+                file_name="facturas.db",
+                mime="application/x-sqlite3",
+                use_container_width=True,
+            )
+
+
 def _render_db_history_tab() -> None:
     """Permite auditar los registros almacenados en facturas.db."""
     st.markdown("##### 💾 Últimas Facturas Persistidas en SQLite")
@@ -451,64 +514,14 @@ def _render_db_history_tab() -> None:
                 .all()
             )
 
-        if registros:
-            datos = [
-                {
-                    "ID": r.id,
-                    "Tenant": r.empresa.razon_social if r.empresa else "Demo",
-                    "Proveedor": r.proveedor,
-                    "NIT/Identificación": (
-                        r.tercero.identificacion_fiscal
-                        if r.tercero and r.tercero.identificacion_fiscal
-                        else "—"
-                    ),
-                    "Tipo": r.tipo_comprobante,
-                    "Fecha": r.fecha or "—",
-                    "Subtotal": f"${r.subtotal:,.2f}" if r.subtotal is not None else "—",
-                    "Impuestos": f"${r.impuestos:,.2f}" if r.impuestos is not None else "—",
-                    "Total": f"${r.total:,.2f}" if r.total is not None else "—",
-                    "Estado": r.estado,
-                    "Método": r.metodo_extraccion,
-                    "Archivo": Path(r.archivo_origen).name,
-                }
-                for r in registros
-            ]
-            st.dataframe(pd.DataFrame(datos), use_container_width=True, hide_index=True)
-
-            st.write("###### Descargas Disponibles")
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                excel_bytes = _obtener_excel_bytes()
-                if excel_bytes:
-                    st.download_button(
-                        label="📊 Descargar Excel",
-                        data=excel_bytes,
-                        file_name="reporte_facturas.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True,
-                    )
-            with c2:
-                csv_bytes = _generar_csv_facturas()
-                if csv_bytes:
-                    st.download_button(
-                        label="📄 Descargar CSV",
-                        data=csv_bytes,
-                        file_name="facturas_consolidadas.csv",
-                        mime="text/csv",
-                        use_container_width=True,
-                    )
-            with c3:
-                if RUTA_BD.exists():
-                    st.download_button(
-                        label="💾 Descargar BD SQLite",
-                        data=RUTA_BD.read_bytes(),
-                        file_name="facturas.db",
-                        mime="application/x-sqlite3",
-                        use_container_width=True,
-                    )
-        else:
+        if not registros:
             st.info("La base de datos aún no contiene registros.")
-    except Exception as exc:  # noqa: BLE001
+            return
+
+        datos = _formatear_filas_historial(registros)
+        st.dataframe(pd.DataFrame(datos), use_container_width=True, hide_index=True)
+        _render_botones_descarga_historial()
+    except Exception as exc:
         st.warning(f"No se pudo consultar el historial: {exc}")
 
 
@@ -583,8 +596,8 @@ with st.sidebar:
         st.download_button(
             label="📊 Descargar Reporte Excel",
             data=excel_side,
-            file_name="reporte_facturas.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            file_name=_NOMBRE_REPORTE_EXCEL,
+            mime=_MIME_EXCEL,
             use_container_width=True,
         )
     csv_side = _generar_csv_facturas()

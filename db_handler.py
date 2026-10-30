@@ -151,6 +151,25 @@ def obtener_o_crear_tercero(
     return tercero
 
 
+def _calcular_subtotal_e_impuestos(factura: InvoiceModel) -> tuple[float | None, float | None]:
+    """Calcula valores por defecto para subtotal e impuestos si no vienen explícitos."""
+    subtotal = factura.subtotal
+    if subtotal is None:
+        if factura.total is not None and factura.impuestos is not None:
+            subtotal = factura.total - factura.impuestos
+        else:
+            subtotal = factura.total
+
+    impuestos = factura.impuestos
+    if impuestos is None:
+        if factura.total is not None and subtotal is not None and factura.total >= subtotal:
+            impuestos = round(factura.total - subtotal, 2)
+        else:
+            impuestos = 0.0
+
+    return subtotal, impuestos
+
+
 def insertar_factura(
     factura: InvoiceModel,
     archivo_origen: str,
@@ -170,24 +189,7 @@ def insertar_factura(
             ),
         )
 
-        subtotal = (
-            factura.subtotal
-            if factura.subtotal is not None
-            else (
-                factura.total - (factura.impuestos or 0.0)
-                if factura.total is not None and factura.impuestos is not None
-                else factura.total
-            )
-        )
-        impuestos = (
-            factura.impuestos
-            if factura.impuestos is not None
-            else (
-                round(factura.total - subtotal, 2)
-                if factura.total is not None and subtotal is not None and factura.total >= subtotal
-                else 0.0
-            )
-        )
+        subtotal, impuestos = _calcular_subtotal_e_impuestos(factura)
 
         registro = Factura(
             empresa_id=empresa.id,

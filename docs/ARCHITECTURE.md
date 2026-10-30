@@ -135,28 +135,45 @@ The core execution graph is defined as a LangGraph `CompiledStateGraph` passing 
 
 ---
 
-## 4. Data Model & Entity Relationship
+## 4. Data Model & Entity Relationship (3NF Normalized Schema)
 
-Persistence is handled by SQLAlchemy 2.0 using relational integrity constraints and cascading deletions.
+Persistence is handled by SQLAlchemy 2.0 using a Third Normal Form (3NF) relational architecture. It enforces multi-tenancy (`EMPRESAS`), dual AP/AR counterparties (`TERCEROS`), lifecycle tracking (`FACTURAS`), and line-item integrity (`ITEMS_FACTURA`) with cascading deletions.
 
 ```mermaid
 erDiagram
+    EMPRESAS ||--o{ TERCEROS : has
+    EMPRESAS ||--o{ FACTURAS : owns
+    TERCEROS ||--o{ FACTURAS : transacts
     FACTURAS ||--o{ ITEMS_FACTURA : contains
-    
+
+    EMPRESAS {
+        int id PK "Autoincrement"
+        string razon_social "Tenant legal name"
+        string nit "Unique Tax ID (Index)"
+    }
+
+    TERCEROS {
+        int id PK "Autoincrement"
+        int empresa_id FK "References EMPRESAS.id"
+        string tipo "PROVEEDOR | CLIENTE"
+        string nombre "Party legal name"
+        string identificacion_fiscal "Tax ID / VAT"
+    }
+
     FACTURAS {
         int id PK "Autoincrement"
-        string numero_factura "Unique identifier"
-        date fecha_emision "ISO-8601 Date"
-        string emisor_nombre "Vendor / Legal entity"
-        string emisor_nif "Tax ID / VAT"
-        string receptor_nombre "Customer entity"
-        string receptor_nif "Customer Tax ID"
+        int empresa_id FK "References EMPRESAS.id"
+        int tercero_id FK "References TERCEROS.id"
+        string tipo_comprobante "EMITIDA (AR) | RECIBIDA (AP)"
+        string fecha "ISO-8601 Date"
+        string numero_factura "Invoice voucher number"
+        string moneda "ISO 4217 Currency"
         float subtotal "Pre-tax amount"
-        float impuestos "Total tax amount"
+        float impuestos "Total taxes"
         float total "Grand total amount"
-        string moneda "ISO 4217 Currency Code"
-        string ruta_origen "Original file source"
-        boolean metodo_vision "True if processed via Vision Fallback"
+        string estado "PENDIENTE | PAGADA | ANULADA"
+        string archivo_origen "Original file source"
+        string metodo_extraccion "METODO_OCR_LLM | METODO_VISION_FALLBACK"
         datetime creado_en "Audit timestamp"
     }
 
@@ -166,7 +183,7 @@ erDiagram
         string descripcion "Line item description"
         float cantidad "Billed units"
         float precio_unitario "Per-unit cost"
-        float total "Subtotal for line item"
+        float subtotal "Line subtotal"
     }
 ```
 

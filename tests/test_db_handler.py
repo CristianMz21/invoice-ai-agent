@@ -155,3 +155,42 @@ def test_exportar_excel_sin_datos(motor_bd_aislado: tuple[Engine, Path]) -> None
     wb = openpyxl.load_workbook(salida)
     assert wb[db_handler.HOJA_FACTURAS].max_row >= 1
     assert wb[db_handler.HOJA_ITEMS].max_row >= 1
+
+
+def test_migrar_base_de_datos(
+    motor_bd_aislado: tuple[Engine, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Valida que migrar_base_de_datos inicialice las tablas 3NF y cree el tenant demo."""
+    import init_db
+
+    motor, _ = motor_bd_aislado
+    monkeypatch.setattr(init_db, "_motor", motor)
+
+    init_db.migrar_base_de_datos()
+
+    with Session(motor) as sesion:
+        empresas = sesion.execute(select(models.Empresa)).scalars().all()
+        assert len(empresas) == 1
+        assert empresas[0].nit == "900.123.456-7"
+
+
+def test_calcular_subtotal_e_impuestos_casos_borde() -> None:
+    """Valida los cálculos derivados de subtotal e impuestos."""
+    # Caso 1: subtotal e impuestos ya provistos
+    f1 = InvoiceModel(proveedor="A", total=100.0, subtotal=80.0, impuestos=20.0)
+    sub, imp = db_handler._calcular_subtotal_e_impuestos(f1)
+    assert sub == 80.0
+    assert imp == 20.0
+
+    # Caso 2: subtotal ausente, pero total e impuestos presentes
+    f2 = InvoiceModel(proveedor="B", total=100.0, impuestos=15.0)
+    sub, imp = db_handler._calcular_subtotal_e_impuestos(f2)
+    assert sub == 85.0
+    assert imp == 15.0
+
+    # Caso 3: ambos ausentes, solo total
+    f3 = InvoiceModel(proveedor="C", total=50.0)
+    sub, imp = db_handler._calcular_subtotal_e_impuestos(f3)
+    assert sub == 50.0
+    assert imp == 0.0
+
