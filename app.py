@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 from agent import CONFIANZA_MINIMA, EstadoAgente, construir_grafo, construir_llm
-from db_handler import RUTA_EXCEL, _motor, inicializar_bd
+from db_handler import RUTA_BD, RUTA_EXCEL, _motor, exportar_excel, inicializar_bd
 from logging_config import configurar_logging
 from main import _cargar_dotenv
 from models import FacturaRecord, InvoiceModel
@@ -162,6 +162,46 @@ def _guardar_upload(archivo_subido: UploadedFile) -> Path:
     return destino
 
 
+def _obtener_excel_bytes() -> bytes:
+    """Retorna los bytes del reporte Excel regenerándolo si no existe o leyéndolo."""
+    if not RUTA_EXCEL.exists():
+        try:
+            exportar_excel()
+        except Exception:
+            return b""
+    if RUTA_EXCEL.exists():
+        return RUTA_EXCEL.read_bytes()
+    return b""
+
+
+def _generar_csv_facturas() -> bytes:
+    """Genera el contenido CSV consolidado de todas las facturas en la base de datos."""
+    try:
+        with Session(_motor) as sesion:
+            registros = sesion.execute(select(FacturaRecord).order_by(FacturaRecord.id)).scalars().all()
+        if not registros:
+            return b""
+        df = pd.DataFrame(
+            [
+                {
+                    "id": r.id,
+                    "proveedor": r.proveedor,
+                    "fecha_emision": r.fecha_emision,
+                    "numero_factura": r.numero_factura,
+                    "moneda": r.moneda,
+                    "total": r.total,
+                    "metodo_extraccion": r.metodo_extraccion,
+                    "archivo_origen": r.archivo_origen,
+                    "creado_en": r.creado_en,
+                }
+                for r in registros
+            ]
+        )
+        return df.to_csv(index=False).encode("utf-8")
+    except Exception:
+        return b""
+
+
 # ── Ejecución del Grafo con Streaming en Vivo ────────────────────────────────
 
 
@@ -235,11 +275,13 @@ def _mostrar_resultados(estados: EstadoAgente, ruta_archivo: Path | None) -> Non
 
     with col_data:
         st.subheader("📊 Extracción & Conciliación MCP")
-        tab_resumen, tab_mcp, tab_bd = st.tabs([
-            "📋 Datos & Auditoría",
-            "🛠️ Trazabilidad Agéntica",
-            "💾 Historial BD",
-        ])
+        tab_resumen, tab_mcp, tab_bd = st.tabs(
+            [
+                "📋 Datos & Auditoría",
+                "🛠️ Trazabilidad Agéntica",
+                "💾 Historial BD",
+            ]
+        )
 
         with tab_resumen:
             _render_resumen_tab(factura)
@@ -277,7 +319,7 @@ def _render_document_preview(ruta_archivo: Path | None, estados: EstadoAgente) -
         f'MÉTODO: <strong style="color: #38bdf8;">{metodo}</strong></div>\n'
         f'    <div style="font-size: 0.85rem; color: #94a3b8;">'
         f'CONFIANZA OCR: <strong style="color: {color_confianza};">{confianza:.1%}</strong></div>\n'
-        '</div>'
+        "</div>"
     )
     st.markdown(card_html, unsafe_allow_html=True)
 
@@ -301,29 +343,29 @@ def _render_resumen_tab(factura: InvoiceModel) -> None:
         erp_html = (
             '<div class="erp-card">\n'
             '    <div style="font-weight: 700; color: #10b981; font-size: 0.95rem;">\n'
-            '        🛡️ CONCILIADO CON ERP CORPORATIVO (SAP S/4HANA Master Record)\n'
-            '    </div>\n'
+            "        🛡️ CONCILIADO CON ERP CORPORATIVO (SAP S/4HANA Master Record)\n"
+            "    </div>\n"
             '    <div style="font-size: 0.85rem; color: #cbd5e1; margin-top: 0.3rem;">\n'
-            f'        • <strong>Razón Social:</strong> {erp_data["legal_name"]}<br/>\n'
-            f'        • <strong>NIF/CIF:</strong> {erp_data["tax_id"]} | '
+            f"        • <strong>Razón Social:</strong> {erp_data['legal_name']}<br/>\n"
+            f"        • <strong>NIF/CIF:</strong> {erp_data['tax_id']} | "
             f'<strong>Estatus:</strong> <span style="color: #4ade80;">{erp_data["status"]}</span><br/>\n'
-            f'        • <strong>Términos:</strong> {erp_data["payment_terms"]} | '
-            f'<strong>Órdenes Abiertas:</strong> {pos}\n'
-            '    </div>\n'
-            '</div>'
+            f"        • <strong>Términos:</strong> {erp_data['payment_terms']} | "
+            f"<strong>Órdenes Abiertas:</strong> {pos}\n"
+            "    </div>\n"
+            "</div>"
         )
         st.markdown(erp_html, unsafe_allow_html=True)
     else:
         warning_html = (
             '<div class="erp-card-warning">\n'
             '    <div style="font-weight: 700; color: #f59e0b; font-size: 0.95rem;">\n'
-            '        ⚠️ ATENCIÓN: PROVEEDOR NO REGISTRADO EN EL MAESTRO DE ERP\n'
-            '    </div>\n'
+            "        ⚠️ ATENCIÓN: PROVEEDOR NO REGISTRADO EN EL MAESTRO DE ERP\n"
+            "    </div>\n"
             '    <div style="font-size: 0.85rem; color: #cbd5e1; margin-top: 0.3rem;">\n'
             f'        El proveedor "{factura.proveedor}" no figura en el ERP. '
-            'Requiere validación de Compras.\n'
-            '    </div>\n'
-            '</div>'
+            "Requiere validación de Compras.\n"
+            "    </div>\n"
+            "</div>"
         )
         st.markdown(warning_html, unsafe_allow_html=True)
 
@@ -345,14 +387,26 @@ def _render_resumen_tab(factura: InvoiceModel) -> None:
     else:
         st.info("No se detectaron líneas de detalle individuales.")
 
-    st.write("")
-    if RUTA_EXCEL.exists():
+    st.write("#### 📥 Centro de Descargas")
+    col_dl1, col_dl2 = st.columns(2)
+    excel_bytes = _obtener_excel_bytes()
+    with col_dl1:
+        if excel_bytes:
+            st.download_button(
+                label="📊 Descargar Reporte Excel (.xlsx)",
+                data=excel_bytes,
+                file_name="reporte_facturas.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True,
+            )
+    with col_dl2:
+        nombre_json = f"{factura.numero_factura or 'factura_auditada'}.json"
         st.download_button(
-            label="📥 Descargar Reporte Excel Consolidado",
-            data=RUTA_EXCEL.read_bytes(),
-            file_name="reporte_facturas.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
+            label="🧾 Descargar JSON Estructurado",
+            data=factura.model_dump_json(indent=2),
+            file_name=nombre_json,
+            mime="application/json",
             use_container_width=True,
         )
 
@@ -381,9 +435,11 @@ def _render_db_history_tab() -> None:
     st.markdown("##### 💾 Últimas Facturas Persistidas en SQLite")
     try:
         with Session(_motor) as sesion:
-            registros = sesion.execute(
-                select(FacturaRecord).order_by(FacturaRecord.id.desc()).limit(10)
-            ).scalars().all()
+            registros = (
+                sesion.execute(select(FacturaRecord).order_by(FacturaRecord.id.desc()).limit(10))
+                .scalars()
+                .all()
+            )
 
         if registros:
             datos = [
@@ -399,6 +455,38 @@ def _render_db_history_tab() -> None:
                 for r in registros
             ]
             st.dataframe(pd.DataFrame(datos), use_container_width=True, hide_index=True)
+
+            st.write("###### Descargas Disponibles")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                excel_bytes = _obtener_excel_bytes()
+                if excel_bytes:
+                    st.download_button(
+                        label="📊 Descargar Excel",
+                        data=excel_bytes,
+                        file_name="reporte_facturas.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                    )
+            with c2:
+                csv_bytes = _generar_csv_facturas()
+                if csv_bytes:
+                    st.download_button(
+                        label="📄 Descargar CSV",
+                        data=csv_bytes,
+                        file_name="facturas_consolidadas.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                    )
+            with c3:
+                if RUTA_BD.exists():
+                    st.download_button(
+                        label="💾 Descargar BD SQLite",
+                        data=RUTA_BD.read_bytes(),
+                        file_name="facturas.db",
+                        mime="application/x-sqlite3",
+                        use_container_width=True,
+                    )
         else:
             st.info("La base de datos aún no contiene registros.")
     except Exception as exc:  # noqa: BLE001
@@ -460,6 +548,43 @@ with st.sidebar:
     st.write(f"• API Key LLM: {'✅ Conectado' if api_detectada else '❌ Falta .env'}")
     st.write(f"• Modelo: `{os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')}`")
     st.write(f"• Umbral Calidad OCR: `{CONFIANZA_MINIMA}`")
+
+    st.divider()
+    st.markdown("### 📥 Centro de Exportación")
+    total_reg = 0
+    try:
+        with Session(_motor) as sesion:
+            total_reg = len(sesion.execute(select(FacturaRecord.id)).scalars().all())
+    except Exception:
+        total_reg = 0
+    st.caption(f"Total en repositorio: **{total_reg} facturas**")
+
+    excel_side = _obtener_excel_bytes()
+    if excel_side:
+        st.download_button(
+            label="📊 Descargar Reporte Excel",
+            data=excel_side,
+            file_name="reporte_facturas.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+    csv_side = _generar_csv_facturas()
+    if csv_side:
+        st.download_button(
+            label="📄 Descargar CSV Facturas",
+            data=csv_side,
+            file_name="facturas_consolidadas.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    if RUTA_BD.exists():
+        st.download_button(
+            label="💾 Descargar BD SQLite",
+            data=RUTA_BD.read_bytes(),
+            file_name="facturas.db",
+            mime="application/x-sqlite3",
+            use_container_width=True,
+        )
 
 # ── Selector de Documento ────────────────────────────────────────────────────
 

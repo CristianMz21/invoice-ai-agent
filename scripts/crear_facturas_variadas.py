@@ -11,8 +11,9 @@ Archivos generados:
     factura_norte_arte.png         digital limpia (ARS, formato 1.234,56)
     factura_tecnoexpress_eur.pdf   digital europea, 2 páginas (EUR)
     factura_servicios_tec.jpeg     digital limpia en formato JPEG
-    factura_hoja_taller.png        manuscrita (fuente caligráfica, inclinada)
-    factura_kiosco_central.jpg     escaneo dañado (rotada, borrosa, comprimida)
+    factura_hoja_taller.png        manuscrita clara (fuente caligráfica Z003)
+    factura_kiosco_central.jpg     escaneo sucio (rotada, borrosa, JPEG 45)
+    factura_fotocopia_lavada.jpg   fotocopia desvaída → cae al fallback visual
 
 Uso:
 
@@ -223,11 +224,12 @@ def _linea_manual(
     texto: str,
     fuente: ImageFont.FreeTypeFont,
     rng: random.Random,
+    tinta: str = "#3d3b36",
 ) -> float:
     """Escribe `texto` palabra por palabra con ± jitter vertical (a mano)."""
     x_actual, y_actual = x, y
     for palabra in texto.split():
-        lapiz.text((x_actual, y_actual + rng.uniform(-5.0, 5.0)), palabra, fill="#3d3b36", font=fuente)
+        lapiz.text((x_actual, y_actual + rng.uniform(-5.0, 5.0)), palabra, fill=tinta, font=fuente)
         x_actual += lapiz.textlength(palabra, font=fuente) + rng.uniform(4.0, 9.0)
     return y_actual + fuente.size * 1.55
 
@@ -242,29 +244,50 @@ def _ruido_puntos(
         lapiz.point((rng.randrange(ancho), rng.randrange(alto)), fill=color)
 
 
-def _factura_hoja_taller() -> Image.Image:
-    """Manuscrita a lápiz sobre papel crema, con jitter, subrayados y 3° de giro."""
+def _nota_taller_base(tinta: str, papel: tuple[int, int, int]) -> Image.Image:
+    """Nota del taller a mano con la tinta y el papel indicados (sin degradar)."""
     rng = random.Random(7)
-    imagen = Image.new("RGB", (1050, 1350), (250, 247, 238))
+    imagen = Image.new("RGB", (1050, 1350), papel)
     lapiz = ImageDraw.Draw(imagen)
     fuente = _fuente(30, (_FUENTE_MANUSCRITA,))
 
     y = 60.0
-    y = _linea_manual(lapiz, 70, y, "TALLER HOJA TECNICA", fuente, rng)
-    y = _linea_manual(lapiz, 90, y, "Repuestos y reparaciones", fuente, rng)
-    y = _linea_manual(lapiz, 90, y, "Pedido interno SJ-0291", fuente, rng)
+    y = _linea_manual(lapiz, 70, y, "TALLER HOJA TECNICA", fuente, rng, tinta)
+    y = _linea_manual(lapiz, 90, y, "Repuestos y reparaciones", fuente, rng, tinta)
+    y = _linea_manual(lapiz, 90, y, "Pedido interno SJ-0291", fuente, rng, tinta)
     y += 12
-    y = _linea_manual(lapiz, 90, y, "Reparacion tablero principal  14.800", fuente, rng)
-    y = _linea_manual(lapiz, 90, y, "Mano de obra x 4 horas       20.000", fuente, rng)
+    y = _linea_manual(lapiz, 90, y, "Reparacion tablero principal  14.800", fuente, rng, tinta)
+    y = _linea_manual(lapiz, 90, y, "Mano de obra x 4 horas       20.000", fuente, rng, tinta)
     y += 14
-    lapiz.line((560, y, 980, y), fill="#3d3b36", width=2)
-    y = _linea_manual(lapiz, 560, y, "TOTAL $  34.800", fuente, rng)
-    lapiz.line((560, y - 4, 980, y - 4), fill="#3d3b36", width=2)
+    lapiz.line((560, y, 980, y), fill=tinta, width=2)
+    y = _linea_manual(lapiz, 560, y, "TOTAL $  34.800", fuente, rng, tinta)
+    lapiz.line((560, y - 4, 980, y - 4), fill=tinta, width=2)
+    return imagen
 
-    _ruido_puntos(imagen, rng, cantidad=1500, color="#9a978e")
-    filtrada = imagen.rotate(3.0, resample=Image.Resampling.BICUBIC, expand=True, fillcolor=(250, 247, 238))
+
+def _factura_hoja_taller() -> Image.Image:
+    """Manuscrita a lápiz sobre papel crema, claramente legible (OCR directa)."""
+    tinta, papel = "#3d3b36", (250, 247, 238)
+    base = _nota_taller_base(tinta, papel)
+    _ruido_puntos(base, random.Random(7), cantidad=1500, color="#9a978e")
     logger.debug("Manuscrita dibujada (fuente Z003, giro 3°)")
-    return filtrada
+    return base.rotate(3.0, resample=Image.Resampling.BICUBIC, expand=True, fillcolor=papel)
+
+
+def _factura_fotocopia_lavada() -> Image.Image:
+    """Fotocopia lavada de la misma nota: tinta desvaída + giro 7° + pérdida.
+
+    Parámetros calibrados empíricamente: RapidOCR devuelve 0 caracteres
+    (conf 0.00) → el router deriva a `vision_fallback`, que sí puede
+    leerla porque la nota sigue siendo reconocible a simple vista.
+    """
+    tinta, papel = "#b7b4ad", (252, 250, 244)
+    base = _nota_taller_base(tinta, papel)
+    _ruido_puntos(base, random.Random(7), cantidad=3000, color="#9a978e")
+    girada = base.rotate(7.0, resample=Image.Resampling.BICUBIC, expand=True, fillcolor=papel)
+    chica = girada.resize((int(girada.width * 0.25), int(girada.height * 0.25)), Image.Resampling.BILINEAR)
+    vuelta = chica.resize(girada.size, Image.Resampling.BILINEAR)
+    return vuelta.filter(ImageFilter.GaussianBlur(1.6))
 
 
 def _factura_kiosco_central() -> Image.Image:
@@ -285,7 +308,7 @@ def _factura_kiosco_central() -> Image.Image:
         ("Panificados surtidos", "4", "590,00", "2.360,00"),
     )
     y = _tabla_items(lapiz, y, items)
-    y = _totales(lapiz, y + 30, (("Importes con IVA incluido:", "21.060,00"), ("TOTAL:", "$ 21.060,00")))
+    y = _totales(lapiz, y + 30, (("IVA incluido:", "21.060,00"), ("TOTAL:", "$ 21.060,00")))
     _pie(lapiz, y, ("Caja 1 - Cajero: turno manana", "Sin alquiler de sistema"))
     sucia = imagen.rotate(2.2, resample=Image.Resampling.BICUBIC, expand=True, fillcolor="white")
     sucia = sucia.filter(ImageFilter.GaussianBlur(0.6))
@@ -313,13 +336,14 @@ def _guardar(imagen: Image.Image, nombre: str, *, calidad_jpeg: int | None = Non
 
 
 def crear_facturas_variadas() -> list[Path]:
-    """Genera las 5 muestras nuevas en `data/` y devuelve sus rutas."""
+    """Genera las 6 muestras nuevas en `data/` y devuelve sus rutas."""
     tecno_a, tecno_b = _factura_tecnoexpress(False), _factura_tecnoexpress(True)
     rutas = [
         _guardar(_factura_norte_arte(), "factura_norte_arte.png"),
         _guardar(tecno_a, "factura_tecnoexpress_eur.pdf"),
         _guardar(_factura_servicios_tec(), "factura_servicios_tec.jpeg"),
         _guardar(_factura_hoja_taller(), "factura_hoja_taller.png"),
+        _guardar(_factura_fotocopia_lavada(), "factura_fotocopia_lavada.jpg", calidad_jpeg=50),
         _guardar(_factura_kiosco_central(), "factura_kiosco_central.jpg", calidad_jpeg=45),
     ]
     ruta_pdf = _DIR / "factura_tecnoexpress_eur.pdf"
