@@ -1,0 +1,58 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Testing & Type checking caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+uv.lock.bak
+
+# Environment variables & secrets (CRITICAL)
+.env
+.env.*
+.env.local
+!.env.example
+*.pem
+*.key
+
+# Local databases
+*.sqlite
+*.sqlite3
+*.db
+facturas.db
+
+# Output artifacts & generated reports
+reporte_facturas.xlsx
+*.xlsx
+*.csv
+
+# Test / Ingested data & invoices
+data/
+uploads/
+facturas/
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local agent runtime folders
+.agents/
+.claude/
+.kiro/
+skills-lock.json
+
+# Operating System artifacts
+.DS_Store
+Thumbs.db
