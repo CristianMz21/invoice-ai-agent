@@ -10,7 +10,7 @@ Archivos generados:
 
     factura_norte_arte.png         digital limpia (ARS, formato 1.234,56)
     factura_tecnoexpress_eur.pdf   digital europea, 2 páginas (EUR)
-    factura_servicios_tec.jpeg     digital limpia enformato JPEG
+    factura_servicios_tec.jpeg     digital limpia en formato JPEG
     factura_hoja_taller.png        manuscrita (fuente caligráfica, inclinada)
     factura_kiosco_central.jpg     escaneo dañado (rotada, borrosa, comprimida)
 
@@ -33,7 +33,6 @@ from logging_config import configurar_logging
 logger = logging.getLogger(__name__)
 
 _DIR: Final[Path] = Path(__file__).resolve().parent.parent / "data"
-_RNG: Final[random.Random] = random.Random(2026)
 
 _FUENTES_IMPRENTA: Final[tuple[str, ...]] = (
     "/usr/share/fonts/urw-base35/NimbusSans-Regular.otf",
@@ -54,9 +53,7 @@ def _fuente(tamano: int, candidatos: tuple[str, ...] = _FUENTES_IMPRENTA) -> Ima
     return ImageFont.load_default(size=tamano)  # type: ignore[return-value]
 
 
-def _tablea_items(
-    lapiz: ImageDraw.ImageDraw, y0: int, items: tuple[tuple[str, str, str, str], ...], tamano: int
-) -> int:
+def _tabla_items(lapiz: ImageDraw.ImageDraw, y0: int, items: tuple[tuple[str, str, str, str], ...]) -> int:
     """Dibuja la tabla de items; devuelve la `y` final del encabezado de totales."""
     ancho = 1000
     fuente = _fuente(22)
@@ -153,7 +150,7 @@ def _factura_norte_arte() -> Image.Image:
         ("Velas decorativas aroma", "30", "850,00", "25.500,00"),
         ("Cajas para envio", "20", "375,00", "7.500,00"),
     )
-    y = _tablea_items(lapiz, y, items, 24)
+    y = _tabla_items(lapiz, y, items)
     y = _totales(
         lapiz, y + 30, (("Subtotal:", "87.000,00"), ("IVA 21%:", "18.270,00"), ("TOTAL:", "$ 105.270,00"))
     )
@@ -164,20 +161,17 @@ def _factura_norte_arte() -> Image.Image:
 
 
 def _factura_tecnoexpress(es_copia: bool) -> Image.Image:
-    """Factura europea en EUR (formato 1.234,56), ácabecera de copia opcional."""
+    """Factura europea en EUR (formato 1.234,56), con cabecera de copia opcional."""
     imagen = Image.new("RGB", (1000, 1250), "white")
     lapiz = ImageDraw.Draw(imagen)
-    titulo = "TECNOEXPRESS SOLUCIONES S.L."
-    extra = (
-        "Membresia: copia del cliente" if es_copia else None,
-        "NIF: B12345678",
-        "Calle Mayor 15, 28013 Madrid - Espana",
-    )
+    extra: tuple[str, ...] = ("NIF: B12345678", "Calle Mayor 15, 28013 Madrid - Espana")
+    if es_copia:
+        extra = ("Copia del cliente", *extra)
     y = _comun(
         lapiz,
         40,
-        (titulo, *(linea for linea in extra if linea)),  # type: ignore[arg-type]
-        "FACTURA FR-2026/0374" if not es_copia else "COPIA FR-2026/0374",
+        ("TECNOEXPRESS SOLUCIONES S.L.", *extra),
+        "COPIA M-2026/0374" if es_copia else "FACTURA M-2026/0374",
         "Fecha de emision: 02/05/2026",
         "Cliente: Grupo Delta S.A. - NIF: B87654321",
     )
@@ -186,7 +180,7 @@ def _factura_tecnoexpress(es_copia: bool) -> Image.Image:
         ("Servidor usado Dell R630", "1", "1.180,00", "1.180,00"),
         ("Soporte remoto mensual", "1", "145,75", "145,75"),
     )
-    y = _tablea_items(lapiz, y, items, 24)
+    y = _tabla_items(lapiz, y, items)
     y = _totales(
         lapiz, y + 30, (("Base imponible:", "1.898,75"), ("IVA 21%:", "398,74"), ("TOTAL:", "EUR 2.297,49"))
     )
@@ -211,7 +205,7 @@ def _factura_servicios_tec() -> Image.Image:
         ("Licencias monitorizacion", "5", "12.400,00", "62.000,00"),
         ("Backup cloud mensual", "2", "45.500,00", "91.000,00"),
     )
-    y = _tablea_items(lapiz, y, items, 24)
+    y = _tabla_items(lapiz, y, items)
     y = _totales(
         lapiz, y + 30, (("Subtotal:", "408.000,00"), ("IVA 21%:", "85.680,00"), ("TOTAL:", "$ 493.680,00"))
     )
@@ -290,7 +284,7 @@ def _factura_kiosco_central() -> Image.Image:
         ("Snacks salados", "10", "760,00", "7.600,00"),
         ("Panificados surtidos", "4", "590,00", "2.360,00"),
     )
-    y = _tablea_items(lapiz, y, items, 24)
+    y = _tabla_items(lapiz, y, items)
     y = _totales(lapiz, y + 30, (("Importes con IVA incluido:", "21.060,00"), ("TOTAL:", "$ 21.060,00")))
     _pie(lapiz, y, ("Caja 1 - Cajero: turno manana", "Sin alquiler de sistema"))
     sucia = imagen.rotate(2.2, resample=Image.Resampling.BICUBIC, expand=True, fillcolor="white")
