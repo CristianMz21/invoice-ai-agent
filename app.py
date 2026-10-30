@@ -65,6 +65,10 @@ _TITULOS_NODOS: Final[dict[str, dict[str, str]]] = {
         "label": "🧠 Validando y estructurando con el LLM…",
         "detalle": "Texto OCR → esquema Pydantic (with_structured_output).",
     },
+    "tools": {
+        "label": "🛠️ Consultando herramientas dinámicas y MCP…",
+        "detalle": "Validación contable en ERP / tipos de cambio.",
+    },
     "vision_fallback": {
         "label": "🚑 OCR insuficiente → fallback: Gemini Vision sobre la imagen…",
         "detalle": "Plan de contingencia: la imagen va directamente al LLM.",

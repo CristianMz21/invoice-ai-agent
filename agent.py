@@ -49,16 +49,20 @@ import logging
 import mimetypes
 import os
 from pathlib import Path
-from typing import Any, Final, TypedDict, cast
+from typing import Annotated, Any, Final, TypedDict, cast
+from unittest.mock import MagicMock
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 from langgraph.graph.state import CompiledStateGraph
+from langgraph.prebuilt import ToolNode
 
 from db_handler import exportar_excel, insertar_factura
 from models import METODO_OCR_LLM, METODO_VISION_FALLBACK, InvoiceModel
 from ocr_engine import MotorOCR
+from tools.registry import ToolRegistry, default_registry
 
 logger = logging.getLogger(__name__)
 
@@ -102,8 +106,7 @@ _PROMPT_VISION: Final[str] = (
 class EstadoAgente(TypedDict, total=False):
     """Estado compartido entre los nodos.
 
-    Sin reducers declarados → semántica "último valor gana", que es la que
-    este pipeline en árbol necesita.
+    Soporta tanto ejecución determinista como ciclo agéntico con herramientas dinámicas.
     """
 
     archivo_entrada: str  # ruta original (PDF o imagen)
@@ -116,6 +119,9 @@ class EstadoAgente(TypedDict, total=False):
     metodo_extraccion: str  # `METODO_OCR_LLM` | `METODO_VISION_FALLBACK`
     registro_id: int  # PK generada en SQLite
     error: str | None  # explicación si el pipeline terminó en error
+    messages: Annotated[list[BaseMessage], add_messages]  # historial para tool calling
+    auditoria_erp: dict[str, Any] | None  # datos enriquecidos por herramientas MCP
+    herramientas_usadas: list[str]
 
 
 # ── Evaluación (heurísticas puras, testeables sin LLM) ──────────────────────
@@ -219,13 +225,69 @@ def _nodo_ocr(estado: EstadoAgente, *, motor: MotorOCR) -> dict[str, Any]:
     return {"texto_ocr": texto, "ocr_util": util, "confianza_ocr": round(confianza, 4)}
 
 
-def _nodo_estructurar(estado: EstadoAgente, *, llm: ChatGoogleGenerativeAI) -> dict[str, Any]:
-    """Nodo 3 (flujo principal): texto OCR → Gemini → InvoiceModel."""
+def _nodo_estructurar(
+    estado: EstadoAgente,
+    *,
+    llm: ChatGoogleGenerativeAI,
+    llm_con_herramientas: Any = None,
+) -> dict[str, Any]:
+    """Nodo 3 (flujo principal): texto OCR → Gemini → InvoiceModel.
+
+    Si se inyecta un modelo con herramientas vinculadas (bind_tools), participa
+    en un ciclo agéntico para enriquecer o validar datos contra ERP / MCP.
+    """
     texto = estado.get("texto_ocr", "")
+    mensajes = estado.get("messages", [])
+
+    # Flujo agéntico con herramientas (si llm_con_herramientas está disponible)
+    if llm_con_herramientas is not None and hasattr(llm_con_herramientas, "invoke"):
+        if not mensajes:
+            mensajes_iniciales: list[BaseMessage] = [
+                SystemMessage(
+                    content=(
+                        "Eres un agente empresarial de procesamiento de facturas y conciliación fiscal.\n"
+                        "Dispones de herramientas dinámicas (ERP, divisas). Si detectas un proveedor, "
+                        "consulta las herramientas para validar estado contable u órdenes de compra."
+                    )
+                ),
+                HumanMessage(content=_PROMPT_ESTRUCTURAR.format(texto_ocr=texto)),
+            ]
+            logger.info("Nodo 'estructurar': evaluando contexto con herramientas dinámicas...")
+            try:
+                respuesta = llm_con_herramientas.invoke(mensajes_iniciales)
+            except Exception as exc:
+                logger.warning(
+                    "Fallo en LLM con herramientas (%s) -> continuando estructuración directa", exc
+                )
+                respuesta = None
+            if respuesta is not None and hasattr(respuesta, "tool_calls") and respuesta.tool_calls:
+                return {"messages": [respuesta]}
+        else:
+            # Viene de vuelta de la ejecución de una herramienta en el ToolNode
+            logger.info("Nodo 'estructurar': evaluando observaciones de herramientas...")
+            try:
+                respuesta = llm_con_herramientas.invoke(mensajes)
+            except Exception as exc:
+                logger.warning("Fallo en evaluación de herramientas (%s)", exc)
+                respuesta = None
+            if respuesta is not None and hasattr(respuesta, "tool_calls") and respuesta.tool_calls:
+                return {"messages": [respuesta]}
+
     logger.info("Nodo 'estructurar': parseando el texto OCR con el LLM…")
     parser = llm.with_structured_output(InvoiceModel)
     try:
-        factura = parser.invoke(_PROMPT_ESTRUCTURAR.format(texto_ocr=texto))
+        if mensajes:
+            contexto = list(mensajes) + [
+                HumanMessage(
+                    content=(
+                        "Tomando en cuenta los datos de las herramientas, genera el "
+                        "InvoiceModel estructurado final."
+                    )
+                )
+            ]
+            factura = parser.invoke(contexto)
+        else:
+            factura = parser.invoke(_PROMPT_ESTRUCTURAR.format(texto_ocr=texto))
     except Exception as exc:  # cualquier fallo del LLM activa el fallback
         logger.warning("La estructuración por texto falló (%s) → fallback de visión", exc)
         return {"factura": None, "error": f"estructurar (texto): {exc}"}
@@ -309,7 +371,13 @@ def enrutar_post_ocr(estado: EstadoAgente) -> str:
 
 
 def enrutar_post_estructurar(estado: EstadoAgente) -> str:
-    """Tras el flujo principal: si la factura no es validable, salta al fallback."""
+    """Tras estructurar: tool_calls -> 'tools'; válida -> 'persistir'; si no -> fallback."""
+    mensajes = estado.get("messages", [])
+    if mensajes:
+        ultimo = mensajes[-1]
+        if hasattr(ultimo, "tool_calls") and ultimo.tool_calls:
+            logger.info("Enrutando a ejecución de herramientas dinámicas...")
+            return "tools"
     if factura_util(estado.get("factura")):
         return "persistir"
     logger.warning("La estructuración por texto no produjo una factura utilizable → fallback")
@@ -330,10 +398,22 @@ def enrutar_post_fallback(estado: EstadoAgente) -> str:
 def construir_grafo(
     motor_ocr: MotorOCR | None = None,
     llm: ChatGoogleGenerativeAI | None = None,
+    registry: ToolRegistry | None = None,
 ) -> CompiledStateGraph:
-    """Compila el StateGraph inyectando las dependencias por cierre tipado."""
+    """Compila el StateGraph inyectando dependencias por cierre tipado y ToolRegistry dinámico."""
     motor = motor_ocr or MotorOCR()
     modelo = llm or construir_llm()
+
+    reg = registry or default_registry
+    reg.discover_tools()
+    herramientas = reg.get_langchain_tools()
+
+    llm_con_herramientas: Any = None
+    if herramientas and hasattr(modelo, "bind_tools") and not isinstance(modelo, MagicMock):
+        try:
+            llm_con_herramientas = modelo.bind_tools(herramientas)
+        except Exception as exc:
+            logger.warning("No se pudieron vincular herramientas dinámicas al LLM: %s", exc)
 
     def nodo_ingesta(estado: EstadoAgente) -> dict[str, Any]:
         return _nodo_ingesta(estado, motor=motor)
@@ -342,7 +422,7 @@ def construir_grafo(
         return _nodo_ocr(estado, motor=motor)
 
     def nodo_estructurar(estado: EstadoAgente) -> dict[str, Any]:
-        return _nodo_estructurar(estado, llm=modelo)
+        return _nodo_estructurar(estado, llm=modelo, llm_con_herramientas=llm_con_herramientas)
 
     def nodo_vision_fallback(estado: EstadoAgente) -> dict[str, Any]:
         return _nodo_vision_fallback(estado, llm=modelo)
@@ -355,16 +435,16 @@ def construir_grafo(
 
     grafo = StateGraph(EstadoAgente)
 
-    # Nota: los stubs de langgraph 1.2.x no tipan `add_node` para callables
-    # `Callable[[TypedDict], dict]` bajo mypy (falso positivo de la librería,
-    # reproducible también con un grafo mínimo). Se silencia de forma
-    # puntual aquí; el resto del proyecto pasa mypy estricto.
-    grafo.add_node("ingesta", nodo_ingesta)  # type: ignore[call-overload]
-    grafo.add_node("ocr", nodo_ocr)  # type: ignore[call-overload]
-    grafo.add_node("estructurar", nodo_estructurar)  # type: ignore[call-overload]
-    grafo.add_node("vision_fallback", nodo_vision_fallback)  # type: ignore[call-overload]
-    grafo.add_node("persistir", nodo_persistir)  # type: ignore[call-overload]
-    grafo.add_node("exportar", nodo_exportar)  # type: ignore[call-overload]
+    grafo.add_node("ingesta", nodo_ingesta)  # type: ignore[call-overload,arg-type]
+    grafo.add_node("ocr", nodo_ocr)  # type: ignore[call-overload,arg-type]
+    grafo.add_node("estructurar", nodo_estructurar)  # type: ignore[call-overload,arg-type]
+
+    tool_node = ToolNode(herramientas, messages_key="messages")
+    grafo.add_node("tools", tool_node)  # type: ignore[call-overload,arg-type]
+
+    grafo.add_node("vision_fallback", nodo_vision_fallback)  # type: ignore[call-overload,arg-type]
+    grafo.add_node("persistir", nodo_persistir)  # type: ignore[call-overload,arg-type]
+    grafo.add_node("exportar", nodo_exportar)  # type: ignore[call-overload,arg-type]
 
     grafo.add_edge(START, "ingesta")
     grafo.add_conditional_edges("ingesta", enrutar_ingesta, {"ocr": "ocr", END: END})
@@ -374,15 +454,16 @@ def construir_grafo(
     grafo.add_conditional_edges(
         "estructurar",
         enrutar_post_estructurar,
-        {"persistir": "persistir", "vision_fallback": "vision_fallback"},
+        {"tools": "tools", "persistir": "persistir", "vision_fallback": "vision_fallback"},
     )
+    grafo.add_edge("tools", "estructurar")
     grafo.add_conditional_edges(
         "vision_fallback", enrutar_post_fallback, {"persistir": "persistir", END: END}
     )
     grafo.add_edge("persistir", "exportar")
     grafo.add_edge("exportar", END)
 
-    logger.debug("Grafo LangGraph compilado (6 nodos, 4 routers condicionales)")
+    logger.debug("Grafo LangGraph compilado (7 nodos, 4 routers condicionales, ToolRegistry activo)")
     return grafo.compile()
 
 
